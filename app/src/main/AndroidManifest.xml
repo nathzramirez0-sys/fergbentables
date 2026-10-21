@@ -3,7 +3,13 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!--
-        No <uses-permission> entries are needed, deliberately:
+        One permission is asked for: POST_NOTIFICATIONS, for the inventory's stock reminders and
+        low-stock alerts. Android 13+ asks the operator the first time a reminder is switched on;
+        without it the notifications still appear in the app's Inventory > Notifications list.
+        (WorkManager, which runs the reminders in the background, adds its own scheduling
+        permissions such as RECEIVE_BOOT_COMPLETED to the merged manifest.)
+
+        Everything else needs no permission, deliberately:
           - Photos from the gallery come through the system Photo Picker (the user shares one image).
           - Camera photos are taken by the device's camera app and handed back through FileProvider,
             so the CAMERA permission is never requested.
@@ -12,6 +18,7 @@
           - Shared Excel files and PDFs go out as content:// URIs, not through shared storage.
         The app is fully offline, so INTERNET is not declared either.
     -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 

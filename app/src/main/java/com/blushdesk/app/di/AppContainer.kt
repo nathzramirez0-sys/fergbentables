@@ -2,7 +2,10 @@ package com.blushdesk.app.di
 
 import android.content.Context
 import com.blushdesk.app.data.local.database.AppDatabase
+import com.blushdesk.app.data.repository.OfflineInventoryRepository
 import com.blushdesk.app.data.repository.OfflineShowroomRepository
+import com.blushdesk.app.domain.repository.InventoryRepository
+import com.blushdesk.app.notifications.InventoryNotifier
 import com.blushdesk.app.domain.repository.ShowroomRepository
 import com.blushdesk.app.utils.AndroidDocumentService
 import com.blushdesk.app.utils.DocumentService
@@ -26,10 +29,15 @@ class AppContainer(context: Context) {
 
     val repository: ShowroomRepository by lazy { OfflineShowroomRepository(database, photoStorage) }
 
+    val inventory: InventoryRepository by lazy { OfflineInventoryRepository(database, photoStorage) }
+
+    val notifier: InventoryNotifier by lazy { InventoryNotifier(appContext, inventory) }
+
     val documents: DocumentService by lazy {
         AndroidDocumentService(
             context = appContext,
             repository = repository,
+            inventory = inventory,
             excel = ExcelExporter(),
             pdf = PdfReceiptGenerator(),
             downloads = DownloadsSaver(appContext),

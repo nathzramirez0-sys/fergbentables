@@ -14,8 +14,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.Inventory
 import androidx.compose.material.icons.filled.ShoppingBag
+import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -40,7 +41,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.blushdesk.app.data.local.database.InventorySummary
 import com.blushdesk.app.domain.model.PaymentStatus
 import com.blushdesk.app.ui.buyer.AddBuyerDialog
 import com.blushdesk.app.ui.buyer.BuyerDetailActions
@@ -51,7 +55,9 @@ import com.blushdesk.app.ui.components.LoadingIndicator
 import com.blushdesk.app.ui.components.PhotoActions
 import com.blushdesk.app.ui.components.ShowroomSnackbarHost
 import com.blushdesk.app.ui.components.show
+import com.blushdesk.app.ui.export.ExportChoiceDialog
 import com.blushdesk.app.ui.export.ExportDialog
+import com.blushdesk.app.ui.inventory.InventoryUiState
 import com.blushdesk.app.ui.export.ExportSavedDialog
 import com.blushdesk.app.ui.operator.EditOperatorProfileDialog
 import com.blushdesk.app.ui.order.AddOrderDialog
@@ -86,6 +92,7 @@ private sealed interface ActiveDialog {
     data class DeleteBuyer(val buyerId: Long) : ActiveDialog
     data class DeleteOrder(val orderId: Long) : ActiveDialog
     data object Export : ActiveDialog
+    data class ExportBuyer(val buyerId: Long) : ActiveDialog
 
     /** Not saved: the receipt is already in Downloads, so losing this dialog loses nothing. */
     data class ReceiptReady(val receipt: ReceiptDocument) : ActiveDialog
@@ -102,6 +109,7 @@ private val ActiveDialogSaver = listSaver<ActiveDialog, Any>(
             ActiveDialog.EditProfile -> listOf("profile")
             ActiveDialog.AddBuyer -> listOf("addBuyer")
             ActiveDialog.Export -> listOf("export")
+            is ActiveDialog.ExportBuyer -> listOf("exportBuyer", dialog.buyerId)
             is ActiveDialog.EditBuyer -> listOf("editBuyer", dialog.buyerId)
             is ActiveDialog.AddOrder -> listOf("addOrder", dialog.buyerId)
             is ActiveDialog.EditOrder -> listOf("editOrder", dialog.orderId)
@@ -115,6 +123,7 @@ private val ActiveDialogSaver = listSaver<ActiveDialog, Any>(
             "profile" -> ActiveDialog.EditProfile
             "addBuyer" -> ActiveDialog.AddBuyer
             "export" -> ActiveDialog.Export
+            "exportBuyer" -> id?.let(ActiveDialog::ExportBuyer)
             "editBuyer" -> id?.let(ActiveDialog::EditBuyer)
             "addOrder" -> id?.let(ActiveDialog::AddOrder)
             "editOrder" -> id?.let(ActiveDialog::EditOrder)
@@ -126,12 +135,18 @@ private val ActiveDialogSaver = listSaver<ActiveDialog, Any>(
 )
 
 /**
- * The app's one screen: an adaptive master-detail layout. At 600dp and wider both panes show side
- * by side; narrower windows (phone, split screen, Android 16+ ignoring the landscape request) show
- * one pane at a time with a back arrow.
+ * The showroom: an adaptive master-detail layout. At 600dp and wider both panes show side by side;
+ * narrower windows (phone, split screen, Android 16+ ignoring the landscape request) show one pane
+ * at a time with a back arrow. The top bar's Inventory System button opens the inventory
+ * ([onOpenInventory]); the Excel export lives on the dashboard and on each buyer's profile.
  */
 @Composable
-fun ShowroomTabletScreen(viewModel: ShowroomViewModel) {
+fun ShowroomTabletScreen(
+    viewModel: ShowroomViewModel,
+    inventory: InventorySummary = InventoryUiState.EMPTY_SUMMARY,
+    unreadNotifications: Int = 0,
+    onOpenInventory: () -> Unit = {},
+) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -158,7 +173,7 @@ fun ShowroomTabletScreen(viewModel: ShowroomViewModel) {
                 is UiEvent.Error -> scope.launch { snackbar.show(event.message, isError = true) }
                 is UiEvent.ReceiptReady -> dialog = ActiveDialog.ReceiptReady(event.receipt)
                 is UiEvent.ShareWorkbook -> {
-                    if (dialog == ActiveDialog.Export) dialog = ActiveDialog.None
+                    if (dialog == ActiveDialog.Export || dialog is ActiveDialog.ExportBuyer) dialog = ActiveDialog.None
                     share(
                         file = event.export.file,
                         mime = AppFiles.MIME_XLSX,
@@ -180,6 +195,7 @@ fun ShowroomTabletScreen(viewModel: ShowroomViewModel) {
             is ActiveDialog.EditBuyer -> detail.buyer.id != open.buyerId
             is ActiveDialog.AddOrder -> detail.buyer.id != open.buyerId
             is ActiveDialog.DeleteBuyer -> detail.buyer.id != open.buyerId
+            is ActiveDialog.ExportBuyer -> detail.buyer.id != open.buyerId
             is ActiveDialog.EditOrder -> detail.orders.none { it.order.id == open.orderId }
             is ActiveDialog.DeleteOrder -> detail.orders.none { it.order.id == open.orderId }
             else -> false
@@ -208,6 +224,7 @@ fun ShowroomTabletScreen(viewModel: ShowroomViewModel) {
         val detailActions = BuyerDetailActions(
             onEditBuyer = { state.detail?.buyer?.let { dialog = ActiveDialog.EditBuyer(it.id) } },
             onDeleteBuyer = { state.detail?.buyer?.let { dialog = ActiveDialog.DeleteBuyer(it.id) } },
+            onExportBuyer = { state.detail?.buyer?.let { dialog = ActiveDialog.ExportBuyer(it.id) } },
             onAddOrder = { state.detail?.buyer?.let { dialog = ActiveDialog.AddOrder(it.id) } },
             onAddBuyer = { dialog = ActiveDialog.AddBuyer },
             onSelectOrder = viewModel::selectOrder,
@@ -230,7 +247,8 @@ fun ShowroomTabletScreen(viewModel: ShowroomViewModel) {
                     showBack = detailOnly,
                     onBack = { showDetailWhenCompact = false },
                     compact = compact,
-                    onExport = { dialog = ActiveDialog.Export },
+                    unreadNotifications = unreadNotifications,
+                    onOpenInventory = onOpenInventory,
                 )
             },
         ) { padding ->
@@ -244,6 +262,9 @@ fun ShowroomTabletScreen(viewModel: ShowroomViewModel) {
                     },
                     onEditProfile = { dialog = ActiveDialog.EditProfile },
                     onAddBuyer = { dialog = ActiveDialog.AddBuyer },
+                    inventory = inventory,
+                    onOpenInventory = onOpenInventory,
+                    onExport = { dialog = ActiveDialog.Export },
                     onAddOrder = {
                         state.detail?.buyer?.let {
                             dialog = ActiveDialog.AddOrder(it.id)
@@ -326,6 +347,7 @@ fun ShowroomTabletScreen(viewModel: ShowroomViewModel) {
             AddOrderDialog(
                 buyerId = buyer.id,
                 buyerName = buyer.fullName,
+                products = state.products,
                 onSave = { order, items ->
                     viewModel.saveOrder(order, items)
                     dismiss()
@@ -338,6 +360,7 @@ fun ShowroomTabletScreen(viewModel: ShowroomViewModel) {
             EditOrderDialog(
                 order = order,
                 buyerName = state.detail?.buyer?.fullName.orEmpty(),
+                products = state.products,
                 onSave = { edited, items ->
                     viewModel.saveOrder(edited, items)
                     dismiss()
@@ -348,6 +371,8 @@ fun ShowroomTabletScreen(viewModel: ShowroomViewModel) {
 
         is ActiveDialog.DeleteBuyer -> state.detail?.takeIf { it.buyer.id == active.buyerId }?.let { detail ->
             val orders = detail.orders.size
+            val stocked = detail.orders.any { order -> order.itemRows.any { it.productId != null } }
+            var restock by rememberSaveable { mutableStateOf(true) }
             DeleteConfirmationDialog(
                 title = "Delete ${detail.buyer.fullName}?",
                 message = if (orders == 0) {
@@ -355,8 +380,12 @@ fun ShowroomTabletScreen(viewModel: ShowroomViewModel) {
                 } else {
                     "Their $orders order${if (orders == 1) "" else "s"} will be deleted too. This cannot be undone."
                 },
+                optionLabel = if (stocked) "Put their inventory items back in stock" else null,
+                optionChecked = restock,
+                onOptionChange = { restock = it },
+                optionHint = "Untick if the items were delivered or damaged and should not be counted again.",
                 onConfirm = {
-                    viewModel.deleteBuyer(detail.buyer.id)
+                    viewModel.deleteBuyer(detail.buyer.id, restock = stocked && restock)
                     showDetailWhenCompact = false
                     dismiss()
                 },
@@ -365,12 +394,18 @@ fun ShowroomTabletScreen(viewModel: ShowroomViewModel) {
         }
 
         is ActiveDialog.DeleteOrder -> orderOf(active.orderId)?.let { order ->
+            val stocked = order.itemRows.any { it.productId != null }
+            var restock by rememberSaveable { mutableStateOf(true) }
             DeleteConfirmationDialog(
                 title = "Delete this order?",
                 message = "${Formats.itemsSummary(order.items.map { it.productName })} " +
                     "(${Formats.orderNumber(order.order.id)}) will be removed. This cannot be undone.",
+                optionLabel = if (stocked) "Put its inventory items back in stock" else null,
+                optionChecked = restock,
+                onOptionChange = { restock = it },
+                optionHint = "Untick if the items were delivered or damaged and should not be counted again.",
                 onConfirm = {
-                    viewModel.deleteOrder(order.order.id)
+                    viewModel.deleteOrder(order.order.id, restock = stocked && restock)
                     dismiss()
                 },
                 onDismiss = dismiss,
@@ -383,7 +418,25 @@ fun ShowroomTabletScreen(viewModel: ShowroomViewModel) {
             onDownload = viewModel::downloadExcel,
             onShare = viewModel::shareExcel,
             onDismiss = dismiss,
+            productCount = state.products.size,
         )
+
+        is ActiveDialog.ExportBuyer -> buyerOf(active.buyerId)?.let { buyer ->
+            ExportChoiceDialog(
+                title = "Export ${buyer.fullName}",
+                description = "Creates an .xlsx workbook with only this buyer's profile, orders and items. Download saves it in " +
+                    "Download/$APP_NAME on this device; Share sends it by email, to Drive or to another app.",
+                sheets = listOf(
+                    "Profile" to "Contact details, totals and payment status",
+                    "Items" to "Each of their orders' products, with totals",
+                    "Orders" to "One row per product line",
+                ),
+                exporting = state.exporting,
+                onDownload = { viewModel.exportBuyer(buyer.id, download = true) },
+                onShare = { viewModel.exportBuyer(buyer.id, download = false) },
+                onDismiss = dismiss,
+            )
+        }
 
         is ActiveDialog.ExportSaved -> ExportSavedDialog(
             displayName = active.export.displayName,
@@ -419,7 +472,11 @@ fun ShowroomTabletScreen(viewModel: ShowroomViewModel) {
     }
 }
 
-/** App bar with the brand, the store name, and the prominent "Export to Excel" action. */
+/**
+ * App bar with the brand, the store name, and the prominent "Inventory System" action (where the
+ * Export button used to be; the export moved to the dashboard). A badge counts unread inventory
+ * notifications.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ShowroomTopBar(
@@ -427,7 +484,8 @@ private fun ShowroomTopBar(
     showBack: Boolean,
     onBack: () -> Unit,
     compact: Boolean,
-    onExport: () -> Unit,
+    unreadNotifications: Int,
+    onOpenInventory: () -> Unit,
 ) {
     TopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -463,9 +521,21 @@ private fun ShowroomTopBar(
             }
         },
         actions = {
-            Button(onClick = onExport, modifier = Modifier.padding(end = Dimens.spaceL)) {
-                Icon(Icons.Filled.FileDownload, contentDescription = null, modifier = Modifier.size(Dimens.iconMedium))
-                Text(if (compact) "  Export" else "  Export to Excel")
+            Button(onClick = onOpenInventory, modifier = Modifier.padding(end = Dimens.spaceL)) {
+                Icon(Icons.Filled.Inventory, contentDescription = null, modifier = Modifier.size(Dimens.iconMedium))
+                Text(if (compact) "  Inventory" else "  Inventory System")
+                // Unread stock reminders and low-stock alerts, as a pill after the label.
+                if (unreadNotifications > 0) {
+                    Badge(
+                        modifier = Modifier
+                            .padding(start = Dimens.spaceS)
+                            .semantics { contentDescription = "$unreadNotifications unread" },
+                        containerColor = MaterialTheme.colorScheme.onPrimary,
+                        contentColor = MaterialTheme.colorScheme.primary,
+                    ) {
+                        Text(if (unreadNotifications > 99) "99+" else unreadNotifications.toString())
+                    }
+                }
             }
         },
     )

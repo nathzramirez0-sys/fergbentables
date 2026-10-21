@@ -103,4 +103,104 @@ object Validation {
         items.size > MAX_ITEMS -> "An order can have at most $MAX_ITEMS products"
         else -> items.firstNotNullOfOrNull { itemProblem(it) }
     }
+
+    // ---- Inventory --------------------------------------------------------------------------
+
+    /** Units a product can hold; far above any showroom, and far inside an Int. */
+    const val MAX_STOCK = 999_999
+    private const val MAX_STOCK_TEXT = "999,999"
+    const val MAX_SKU = 30
+    const val MAX_CATEGORY = 40
+    const val MAX_UNIT = 12
+    const val MAX_DESCRIPTION = 300
+    const val MAX_NOTE = 200
+    const val MAX_SUPPLIER = 80
+    const val MAX_REFERENCE = 40
+
+    private val SKU_CHARS = Regex("""^[A-Z0-9][A-Z0-9._/\-]*$""")
+
+    /** Upper-cased and trimmed; blank becomes null. Stored this way so codes compare exactly. */
+    fun normalizeSku(value: String?): String? = value?.trim()?.uppercase()?.ifEmpty { null }
+
+    /** A SKU is optional; when given: letters, digits and . _ / - only. */
+    fun sku(value: String?): String? {
+        val sku = normalizeSku(value) ?: return null
+        return when {
+            sku.length > MAX_SKU -> "Keep it under $MAX_SKU characters"
+            !SKU_CHARS.matches(sku) -> "Use letters, numbers, dots, dashes or slashes"
+            else -> null
+        }
+    }
+
+    fun category(value: String): String? =
+        if (value.trim().length > MAX_CATEGORY) "Keep it under $MAX_CATEGORY characters" else null
+
+    fun unit(value: String): String? = when {
+        value.isBlank() -> "Unit is required, for example pc, set or box"
+        value.trim().length > MAX_UNIT -> "Keep it under $MAX_UNIT characters"
+        else -> null
+    }
+
+    fun description(value: String): String? =
+        if (value.trim().length > MAX_DESCRIPTION) "Keep it under $MAX_DESCRIPTION characters" else null
+
+    /** Cost price is optional; when given it may be zero (a free item) but not more than the maximum. */
+    fun costPrice(input: String): String? {
+        if (input.isBlank()) return null
+        val amount = Money.parse(input) ?: return "Enter an amount like 950 or 950.50"
+        return costPrice(amount)
+    }
+
+    fun costPrice(amount: BigDecimal?): String? = when {
+        amount == null -> null
+        amount.signum() < 0 -> "Cost can't be negative"
+        amount.stripTrailingZeros().scale() > 2 -> "Use at most two decimals"
+        amount > Money.MAX_UNIT_PRICE -> "Cost is too large"
+        else -> null
+    }
+
+    /** A stock count as typed (initial stock, minimum level): a whole number, zero allowed. */
+    fun stockCount(input: String, what: String = "Stock"): String? {
+        val count = input.trim().toIntOrNull() ?: return "Enter a whole number"
+        return stockCount(count, what)
+    }
+
+    fun stockCount(count: Int, what: String = "Stock"): String? = when {
+        count < 0 -> "$what can't be negative"
+        count > MAX_STOCK -> "$what can be at most $MAX_STOCK_TEXT"
+        else -> null
+    }
+
+    /** Units received in one delivery. */
+    fun stockIn(input: String): String? {
+        val qty = input.trim().toIntOrNull() ?: return "Enter a whole number"
+        return when {
+            qty < 1 -> "Enter at least 1"
+            qty > MAX_STOCK -> "Enter at most $MAX_STOCK_TEXT"
+            else -> null
+        }
+    }
+
+    /** A manual adjustment: a non-zero whole number, signed. */
+    fun adjustment(change: Int?): String? = when {
+        change == null -> "Enter a whole number"
+        change == 0 -> "Enter how many to add or remove"
+        kotlin.math.abs(change) > MAX_STOCK -> "Enter at most $MAX_STOCK_TEXT"
+        else -> null
+    }
+
+    fun note(value: String, max: Int = MAX_NOTE): String? =
+        if (value.trim().length > max) "Keep it under $max characters" else null
+
+    /** The first problem with a product about to be saved, or null. */
+    fun productProblem(name: String, sku: String?, category: String, unit: String, description: String,
+                       sellingPrice: BigDecimal, costPrice: BigDecimal?, minimumStock: Int): String? =
+        product(name)
+            ?: sku(sku)
+            ?: category(category)
+            ?: unit(unit)
+            ?: description(description)
+            ?: unitPrice(sellingPrice)
+            ?: costPrice(costPrice)
+            ?: stockCount(minimumStock, "Minimum stock")
 }

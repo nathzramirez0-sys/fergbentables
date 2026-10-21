@@ -16,19 +16,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 
-/** The buyer search box: filters by name, phone or email as the user types. */
+/** A rounded search box that filters as the user types (buyers by default, products in the inventory). */
 @Composable
 fun ShowroomSearchBar(
     query: String,
     onQueryChange: (String) -> Unit,
     modifier: Modifier = Modifier,
+    placeholder: String = "Search name, contact or email",
 ) {
     val focus = LocalFocusManager.current
     OutlinedTextField(
         value = query,
         onValueChange = onQueryChange,
         modifier = modifier.fillMaxWidth(),
-        placeholder = { Text("Search name, contact or email") },
+        placeholder = { Text(placeholder) },
         leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
         trailingIcon = {
             if (query.isNotEmpty()) {

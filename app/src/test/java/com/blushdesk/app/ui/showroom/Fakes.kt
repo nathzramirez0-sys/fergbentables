@@ -10,7 +10,9 @@ import com.blushdesk.app.data.local.database.Order
 import com.blushdesk.app.data.local.database.OrderItem
 import com.blushdesk.app.data.local.database.OrderTotals
 import com.blushdesk.app.data.local.database.OrderWithItems
+import com.blushdesk.app.data.local.database.Product
 import com.blushdesk.app.data.local.database.ShowroomSummary
+import com.blushdesk.app.domain.model.BuyerReport
 import com.blushdesk.app.domain.model.ExportSnapshot
 import com.blushdesk.app.domain.model.FulfillmentStatus
 import com.blushdesk.app.domain.model.PaymentStatus
@@ -43,6 +45,12 @@ class FakeRepository : ShowroomRepository {
     /** When set, every save throws this instead of saving (to test error reporting). */
     var failSavesWith: Exception? = null
 
+    /** The inventory the order form offers; stock itself is covered by the Room repository tests. */
+    val productState = MutableStateFlow<List<Product>>(emptyList())
+
+    /** What the last deleteOrder / deleteBuyer was told about returning items to stock. */
+    var lastRestock: Boolean? = null
+
     private fun withItems(order: Order) = OrderWithItems(order, items.value.filter { it.orderId == order.id })
 
     override val operator: Flow<OperatorProfile> = operatorState
@@ -66,6 +74,8 @@ class FakeRepository : ShowroomRepository {
                 BuyerListItem(buyer, mine.size, mine.firstOrNull()?.fulfillmentStatus, mine.firstOrNull()?.paymentStatus)
             }
     }
+
+    override val products: Flow<List<Product>> = productState
 
     override fun observeBuyer(buyerId: Long): Flow<Buyer?> = buyers.map { list -> list.firstOrNull { it.id == buyerId } }
 
@@ -97,6 +107,12 @@ class FakeRepository : ShowroomRepository {
         takenAt = Instant.EPOCH,
     )
 
+    override suspend fun getBuyerReport(buyerId: Long) = BuyerReport(
+        operator = operatorState.value,
+        buyer = BuyerWithOrders(getBuyer(buyerId)!!, orders.value.filter { it.buyerId == buyerId }.map(::withItems)),
+        takenAt = Instant.EPOCH,
+    )
+
     override suspend fun saveOperator(profile: OperatorProfile) {
         failSavesWith?.let { throw it }
         operatorState.value = profile
@@ -114,7 +130,8 @@ class FakeRepository : ShowroomRepository {
         return buyer.id
     }
 
-    override suspend fun deleteBuyer(buyerId: Long) {
+    override suspend fun deleteBuyer(buyerId: Long, restock: Boolean) {
+        lastRestock = restock
         val gone = orders.value.filter { it.buyerId == buyerId }.map { it.id }.toSet()
         buyers.value = buyers.value.filterNot { it.id == buyerId }
         orders.value = orders.value.filterNot { it.id in gone }
@@ -135,7 +152,8 @@ class FakeRepository : ShowroomRepository {
         return id
     }
 
-    override suspend fun deleteOrder(orderId: Long) {
+    override suspend fun deleteOrder(orderId: Long, restock: Boolean) {
+        lastRestock = restock
         orders.value = orders.value.filterNot { it.id == orderId }
         items.value = items.value.filterNot { it.orderId == orderId }
     }
@@ -171,6 +189,24 @@ class FakeDocuments : DocumentService {
         failure?.let { throw it }
         workbooksCreated++
         return ExportDocument(File("export.xlsx"), "export.xlsx")
+    }
+
+    val buyerWorkbooks = mutableListOf<Long>()
+
+    override suspend fun createBuyerWorkbook(buyerId: Long): ExportDocument {
+        failure?.let { throw it }
+        buyerWorkbooks += buyerId
+        return ExportDocument(File("buyer_$buyerId.xlsx"), "Buyer_${buyerId}_Profile.xlsx")
+    }
+
+    override suspend fun createProductWorkbook(productId: Long): ExportDocument {
+        failure?.let { throw it }
+        return ExportDocument(File("product_$productId.xlsx"), "Product_${productId}_Inventory.xlsx")
+    }
+
+    override suspend fun createInventoryWorkbook(): ExportDocument {
+        failure?.let { throw it }
+        return ExportDocument(File("inventory.xlsx"), "Inventory_Report.xlsx")
     }
 
     override suspend fun saveToDownloads(export: ExportDocument): String {

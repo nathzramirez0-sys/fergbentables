@@ -44,7 +44,7 @@ class OrderFormDialogTest {
 
     private fun showNewOrderForm() = compose.setContent {
         ShowroomPinkTheme {
-            AddOrderDialog(buyerId = 7, buyerName = "Ana Reyes", onSave = { order, items -> saved = order to items }, onDismiss = { dismissed = true })
+            AddOrderDialog(buyerId = 7, buyerName = "Ana Reyes", products = emptyList(), onSave = { order, items -> saved = order to items }, onDismiss = { dismissed = true })
         }
     }
 
@@ -58,7 +58,7 @@ class OrderFormDialogTest {
         )
         compose.setContent {
             ShowroomPinkTheme {
-                EditOrderDialog(order = existing, buyerName = "Ana Reyes", onSave = { order, items -> saved = order to items }, onDismiss = { dismissed = true })
+                EditOrderDialog(order = existing, buyerName = "Ana Reyes", products = emptyList(), onSave = { order, items -> saved = order to items }, onDismiss = { dismissed = true })
             }
         }
     }

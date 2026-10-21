@@ -3,7 +3,10 @@ package com.blushdesk.app.ui.components
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -12,6 +15,7 @@ import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -25,7 +29,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.window.DialogProperties
 import com.blushdesk.app.ui.theme.Dimens
 
@@ -87,7 +93,11 @@ fun FormDialog(
     }
 }
 
-/** Asks before anything is deleted; the confirm button is colored as destructive. */
+/**
+ * Asks before anything is deleted; the confirm button is colored as destructive. An optional
+ * checkbox ([optionLabel]) lets the operator decide something about the deletion, for example
+ * whether an order's items go back in stock.
+ */
 @Composable
 fun DeleteConfirmationDialog(
     title: String,
@@ -95,6 +105,10 @@ fun DeleteConfirmationDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
     confirmLabel: String = "Delete",
+    optionLabel: String? = null,
+    optionChecked: Boolean = false,
+    onOptionChange: (Boolean) -> Unit = {},
+    optionHint: String? = null,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -102,7 +116,25 @@ fun DeleteConfirmationDialog(
         containerColor = MaterialTheme.colorScheme.surface,
         icon = { Icon(Icons.Filled.DeleteForever, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
         title = { Text(title) },
-        text = { Text(message, style = MaterialTheme.typography.bodyLarge) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Dimens.spaceM)) {
+                Text(message, style = MaterialTheme.typography.bodyLarge)
+                if (optionLabel != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .toggleable(value = optionChecked, role = Role.Checkbox, onValueChange = onOptionChange),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = optionChecked, onCheckedChange = null)
+                        Text(optionLabel, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(start = Dimens.spaceS))
+                    }
+                    if (optionHint != null) {
+                        Text(optionHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        },
         confirmButton = {
             Button(
                 onClick = onConfirm,

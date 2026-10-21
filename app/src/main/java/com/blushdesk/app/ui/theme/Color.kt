@@ -4,6 +4,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import com.blushdesk.app.domain.model.FulfillmentStatus
 import com.blushdesk.app.domain.model.PaymentStatus
+import com.blushdesk.app.domain.model.StockStatus
 
 /**
  * The brand colors as plain 0xRRGGBB integers. Compose, the PDF canvas and the Excel styles all
@@ -47,6 +48,16 @@ object BrandPalette {
         PaymentStatus.UNPAID -> RED
         PaymentStatus.PENDING -> AMBER
         PaymentStatus.PAID -> GREEN
+    }
+
+    /** Products withdrawn from sale (unavailable, discontinued, archived) are neutral gray. */
+    private val GRAY = Tone(0x5F5F5F, 0xEEEEEE)
+
+    fun tone(status: StockStatus): Tone = when (status) {
+        StockStatus.IN_STOCK -> GREEN
+        StockStatus.LOW_STOCK -> AMBER
+        StockStatus.OUT_OF_STOCK -> RED
+        StockStatus.UNAVAILABLE, StockStatus.DISCONTINUED, StockStatus.ARCHIVED -> GRAY
     }
 }
 
@@ -102,6 +113,7 @@ data class ShowroomExtendedColors(
 ) {
     fun tone(status: FulfillmentStatus): ToneColors = BrandPalette.tone(status).toColors()
     fun tone(status: PaymentStatus): ToneColors = BrandPalette.tone(status).toColors()
+    fun tone(status: StockStatus): ToneColors = BrandPalette.tone(status).toColors()
 }
 
 /** Built on first use, after [ShowroomColors] is complete, never during its initialization. */

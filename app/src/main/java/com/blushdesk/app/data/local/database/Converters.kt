@@ -1,9 +1,13 @@
 package com.blushdesk.app.data.local.database
 
 import androidx.room.TypeConverter
+import com.blushdesk.app.domain.model.Availability
 import com.blushdesk.app.domain.model.FulfillmentStatus
+import com.blushdesk.app.domain.model.MovementType
+import com.blushdesk.app.domain.model.NotificationKind
 import com.blushdesk.app.domain.model.PaymentMode
 import com.blushdesk.app.domain.model.PaymentStatus
+import com.blushdesk.app.domain.model.ReminderInterval
 import com.blushdesk.app.utils.Money
 import java.math.BigDecimal
 import java.time.Instant
@@ -49,4 +53,33 @@ class Converters {
     @TypeConverter
     fun nameToPaymentStatus(value: String): PaymentStatus =
         PaymentStatus.entries.firstOrNull { it.name == value } ?: PaymentStatus.UNPAID
+
+    @TypeConverter
+    fun availabilityToName(value: Availability): String = value.name
+
+    /** An unknown value hides the product from sale rather than offering it by mistake. */
+    @TypeConverter
+    fun nameToAvailability(value: String): Availability =
+        Availability.entries.firstOrNull { it.name == value } ?: Availability.UNAVAILABLE
+
+    @TypeConverter
+    fun reminderToName(value: ReminderInterval): String = value.name
+
+    @TypeConverter
+    fun nameToReminder(value: String): ReminderInterval =
+        ReminderInterval.entries.firstOrNull { it.name == value } ?: ReminderInterval.NEVER
+
+    @TypeConverter
+    fun movementTypeToName(value: MovementType): String = value.name
+
+    @TypeConverter
+    fun nameToMovementType(value: String): MovementType =
+        MovementType.entries.firstOrNull { it.name == value } ?: MovementType.ADJUSTMENT
+
+    @TypeConverter
+    fun notificationKindToName(value: NotificationKind): String = value.name
+
+    @TypeConverter
+    fun nameToNotificationKind(value: String): NotificationKind =
+        NotificationKind.entries.firstOrNull { it.name == value } ?: NotificationKind.REMAINING_STOCK
 }

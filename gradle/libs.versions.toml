@@ -15,6 +15,8 @@ coroutines = "1.11.0"
 serializationBom = "1.11.0"
 coil = "3.6.3"
 exifinterface = "1.4.2"
+# Background job for the inventory reminders, so they run while the app is closed.
+work = "2.12.0"
 
 # Spreadsheet export. POI is a desktop-Java library; ExcelExporter lists the habits it avoids on
 # Android, and app/proguard-rules.pro what release shrinking has to keep.
@@ -53,6 +55,9 @@ kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-t
 kotlinx-serialization-bom = { module = "org.jetbrains.kotlinx:kotlinx-serialization-bom", version.ref = "serializationBom" }
 
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
+
+androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
+androidx-work-testing = { module = "androidx.work:work-testing", version.ref = "work" }
 
 poi-ooxml = { module = "org.apache.poi:poi-ooxml", version.ref = "poi" }
 

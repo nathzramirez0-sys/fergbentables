@@ -5,11 +5,16 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -18,9 +23,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Inventory
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -49,6 +56,7 @@ import androidx.compose.runtime.toMutableStateList
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
@@ -59,12 +67,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.blushdesk.app.data.local.database.Order
 import com.blushdesk.app.data.local.database.OrderItem
 import com.blushdesk.app.data.local.database.OrderWithItems
+import com.blushdesk.app.data.local.database.Product
 import com.blushdesk.app.domain.model.FulfillmentStatus
 import com.blushdesk.app.domain.model.PaymentMode
 import com.blushdesk.app.domain.model.PaymentStatus
@@ -72,6 +82,7 @@ import com.blushdesk.app.ui.components.FormDialog
 import com.blushdesk.app.ui.components.FormField
 import com.blushdesk.app.ui.components.InlineMessage
 import com.blushdesk.app.ui.components.SegmentedChoice
+import com.blushdesk.app.ui.components.ShowroomSearchBar
 import com.blushdesk.app.ui.theme.Dimens
 import com.blushdesk.app.ui.theme.ShowroomTheme
 import com.blushdesk.app.utils.Formats
@@ -85,8 +96,17 @@ import java.time.ZoneOffset
 
 private val PRICE_INPUT = Regex("""^\d{0,10}(\.\d{0,2})?$""")
 
-/** One product line as typed: still text, so half-typed values survive until they are valid. */
-private data class ItemDraft(val product: String = "", val price: String = "", val quantity: String = "1") {
+/**
+ * One product line as typed: still text, so half-typed values survive until they are valid.
+ * [productId] is set when the line was chosen from the inventory; saving then takes its quantity
+ * out of stock. A line typed in by hand ([productId] null) is a custom item and touches no stock.
+ */
+private data class ItemDraft(
+    val product: String = "",
+    val price: String = "",
+    val quantity: String = "1",
+    val productId: Long? = null,
+) {
     val unitPrice: BigDecimal? get() = Money.parse(price)
     val qty: Int? get() = quantity.trim().toIntOrNull()
     val errors: Triple<String?, String?, String?>
@@ -100,27 +120,63 @@ private data class ItemDraft(val product: String = "", val price: String = "", v
         return if (isValid) Money.total(p, q) else null
     }
 
-    fun toItem(position: Int) = OrderItem(position = position, productName = product, unitPrice = unitPrice!!, quantity = qty!!)
+    fun toItem(position: Int) =
+        OrderItem(position = position, productName = product, unitPrice = unitPrice!!, quantity = qty!!, productId = productId)
 
     companion object {
-        fun of(item: OrderItem) = ItemDraft(item.productName, Money.toInputString(item.unitPrice), item.quantity.toString())
+        fun of(item: OrderItem) =
+            ItemDraft(item.productName, Money.toInputString(item.unitPrice), item.quantity.toString(), item.productId)
+
+        fun of(product: Product, quantity: String) =
+            ItemDraft(product.name, Money.toInputString(product.sellingPrice), quantity, product.id)
     }
 }
 
-/** Keeps the product lines across process death: three strings per line. */
+/** Keeps the product lines across process death: four strings per line (no product id = ""). */
 private val ItemDraftsSaver = listSaver<SnapshotStateList<ItemDraft>, String>(
-    save = { drafts -> drafts.flatMap { listOf(it.product, it.price, it.quantity) } },
-    restore = { flat -> flat.chunked(3).map { ItemDraft(it[0], it[1], it[2]) }.toMutableStateList() },
+    save = { drafts -> drafts.flatMap { listOf(it.product, it.price, it.quantity, it.productId?.toString().orEmpty()) } },
+    restore = { flat -> flat.chunked(4).map { ItemDraft(it[0], it[1], it[2], it[3].toLongOrNull()) }.toMutableStateList() },
 )
+
+/**
+ * Whether the inventory lines of an order fit the stock. A product can be on several lines, so
+ * units are added up per product. What this order already holds (when editing) counts as
+ * available, because saving gives it back before taking the new quantity.
+ */
+private class StockCheck(products: List<Product>, initial: OrderWithItems?, drafts: List<ItemDraft>) {
+    private val byId = products.associateBy { it.id }
+    private val held = initial?.itemRows.orEmpty().mapNotNull { line -> line.productId?.let { it to line.quantity } }
+        .groupBy({ it.first }, { it.second }).mapValues { it.value.sum() }
+    private val wanted = drafts.mapNotNull { d -> d.productId?.let { it to (d.qty ?: 0) } }
+        .groupBy({ it.first }, { it.second }).mapValues { it.value.sum() }
+
+    fun product(id: Long?): Product? = id?.let(byId::get)
+
+    /** Units of the product this order may have: what is in stock plus what it already holds. */
+    fun available(id: Long): Int = (byId[id]?.quantity ?: 0) + (held[id] ?: 0)
+
+    fun error(draft: ItemDraft): String? {
+        val id = draft.productId ?: return null
+        val product = byId[id] ?: return "This product is no longer in the inventory"
+        val want = wanted[id] ?: 0
+        val holds = held[id] ?: 0
+        return when {
+            want > holds && !product.isSellable -> "${product.name} is ${product.stockStatus.label.lowercase()}"
+            want > available(id) -> "Only ${available(id)} ${product.unit} in stock"
+            else -> null
+        }
+    }
+}
 
 /** Records a new purchase for the selected buyer. */
 @Composable
 fun AddOrderDialog(
     buyerId: Long,
     buyerName: String,
+    products: List<Product>,
     onSave: (Order, List<OrderItem>) -> Unit,
     onDismiss: () -> Unit,
-) = OrderFormDialog(buyerId = buyerId, buyerName = buyerName, initial = null, onSave = onSave, onDismiss = onDismiss)
+) = OrderFormDialog(buyerId = buyerId, buyerName = buyerName, initial = null, products = products, onSave = onSave, onDismiss = onDismiss)
 
 /**
  * The order form shared by [AddOrderDialog] ([initial] = null) and [EditOrderDialog]: one or more
@@ -134,6 +190,7 @@ internal fun OrderFormDialog(
     buyerId: Long,
     buyerName: String,
     initial: OrderWithItems?,
+    products: List<Product>,
     onSave: (Order, List<OrderItem>) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -156,9 +213,13 @@ internal fun OrderFormDialog(
     // The line just added with "Add another product", until it has been scrolled to and focused.
     // Not saveable on purpose: rotating the tablet should not jump the form again.
     var newLine by remember { mutableStateOf<Int?>(null) }
+    // Which line's "Choose from inventory" picker is open.
+    var pickingFor by rememberSaveable { mutableStateOf<Int?>(null) }
 
     val local = Instant.ofEpochMilli(purchasedAtMillis).atZone(zone).toLocalDateTime()
-    val allValid = drafts.all { it.isValid }
+    val stock = StockCheck(products, initial, drafts.toList())
+    val sellable = products.filter { it.isSellable }
+    val allValid = drafts.all { it.isValid && stock.error(it) == null }
     val orderTotal = if (allValid) drafts.fold(Money.ZERO) { sum, d -> sum + d.lineTotal!! } else null
     val hasChanges = drafts.toList() != startDrafts ||
         purchasedAtMillis != startMillis ||
@@ -200,9 +261,14 @@ internal fun OrderFormDialog(
                 showErrors = attempted,
                 canRemove = drafts.size > 1,
                 isNew = index == newLine,
+                linked = stock.product(draft.productId),
+                available = draft.productId?.let(stock::available),
+                stockError = stock.error(draft),
+                canPick = sellable.isNotEmpty(),
                 onShown = { newLine = null },
                 onChange = { drafts[index] = it },
                 onRemove = { drafts.removeAt(index) },
+                onPick = { pickingFor = index },
             )
         }
         OutlinedButton(
@@ -216,7 +282,16 @@ internal fun OrderFormDialog(
             Text(if (drafts.size < Validation.MAX_ITEMS) "  Add another product" else "  ${Validation.MAX_ITEMS} products is the limit")
         }
 
-        TotalCard(total = orderTotal, lines = drafts.size, units = drafts.sumOf { it.qty ?: 0 })
+        TotalCard(
+            total = orderTotal,
+            lines = drafts.size,
+            units = drafts.sumOf { it.qty ?: 0 },
+            problem = if (drafts.any { stock.error(it) != null }) {
+                "Some products need more stock than is on hand"
+            } else {
+                "Complete every product's price and quantity"
+            },
+        )
 
         SectionLabel("Purchase date and time")
         Row(horizontalArrangement = Arrangement.spacedBy(Dimens.spaceM)) {
@@ -239,6 +314,18 @@ internal fun OrderFormDialog(
 
         SectionLabel("Fulfillment status")
         SegmentedChoice(FulfillmentStatus.entries, stage, { it.label }, { stage = it })
+    }
+
+    pickingFor?.let { line ->
+        ProductPickerDialog(
+            products = products.filter { !it.archived },
+            available = stock::available,
+            onPick = { product ->
+                drafts.getOrNull(line)?.let { current -> drafts[line] = ItemDraft.of(product, current.quantity) }
+                pickingFor = null
+            },
+            onDismiss = { pickingFor = null },
+        )
     }
 
     if (showDatePicker) {
@@ -293,9 +380,14 @@ private fun ItemEditor(
     showErrors: Boolean,
     canRemove: Boolean,
     isNew: Boolean,
+    linked: Product?,
+    available: Int?,
+    stockError: String?,
+    canPick: Boolean,
     onShown: () -> Unit,
     onChange: (ItemDraft) -> Unit,
     onRemove: () -> Unit,
+    onPick: () -> Unit,
 ) {
     val (productError, priceError, qtyError) = draft.errors
     val bringIntoView = remember { BringIntoViewRequester() }
@@ -339,14 +431,23 @@ private fun ItemEditor(
                 }
             }
             Column(modifier = Modifier.padding(end = Dimens.spaceS), verticalArrangement = Arrangement.spacedBy(Dimens.spaceS)) {
+                InventoryLink(
+                    draft = draft,
+                    linked = linked,
+                    available = available,
+                    canPick = canPick,
+                    onPick = onPick,
+                    onUnlink = { onChange(draft.copy(productId = null)) },
+                )
                 FormField(
                     value = draft.product,
                     onValueChange = { onChange(draft.copy(product = it)) },
-                    label = "Product name",
+                    label = if (draft.productId != null) "Product (from inventory)" else "Product name",
                     modifier = Modifier.focusRequester(nameFocus),
                     leadingIcon = Icons.Filled.Inventory2,
                     error = if (showErrors) productError else null,
                     maxLength = Validation.MAX_PRODUCT,
+                    readOnly = draft.productId != null,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(Dimens.spaceM), verticalAlignment = Alignment.Top) {
                     FormField(
@@ -361,13 +462,150 @@ private fun ItemEditor(
                     QuantityField(
                         value = draft.quantity,
                         onValueChange = { text -> if (text.length <= 4 && text.all { it.isDigit() }) onChange(draft.copy(quantity = text)) },
-                        error = if (showErrors) qtyError else null,
+                        // Too few in stock shows at once, not only after Save: the operator is still with the buyer.
+                        error = (if (showErrors) qtyError else null) ?: stockError,
                         modifier = Modifier.weight(1f),
                     )
                 }
             }
         }
     }
+}
+
+/**
+ * Above a line's name: where it comes from. A line from the inventory shows the stock this order
+ * can draw on and can be turned back into a custom item; a custom line offers the picker.
+ */
+@Composable
+private fun InventoryLink(
+    draft: ItemDraft,
+    linked: Product?,
+    available: Int?,
+    canPick: Boolean,
+    onPick: () -> Unit,
+    onUnlink: () -> Unit,
+) {
+    val linkedLine = draft.productId != null
+    val label: @Composable (Modifier) -> Unit = { modifier ->
+        Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Dimens.spaceS)) {
+            if (linkedLine) {
+                Icon(Icons.Filled.Inventory, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(Dimens.iconMedium))
+            }
+            Text(
+                text = when {
+                    !linkedLine -> "Custom item: no stock is taken"
+                    linked != null -> "From inventory · ${available ?: linked.quantity} ${linked.unit} available" + (linked.sku?.let { " · $it" } ?: "")
+                    else -> "From inventory"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    val actions: @Composable () -> Unit = {
+        if (linkedLine) {
+            TextButton(onClick = onPick) { Text("Change") }
+            TextButton(onClick = onUnlink) { Text("Custom item") }
+        } else if (canPick) {
+            TextButton(onClick = onPick) {
+                Icon(Icons.Filled.Inventory, contentDescription = null, modifier = Modifier.size(Dimens.iconMedium))
+                Text("  Choose from inventory")
+            }
+        }
+    }
+    // Beside the text on a tablet; under it on a phone, where the buttons left the text one letter wide.
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxWidth >= LINK_ROW_MIN_WIDTH) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Dimens.spaceS)) {
+                label(Modifier.weight(1f))
+                actions()
+            }
+        } else {
+            Column {
+                label(Modifier)
+                Row { actions() }
+            }
+        }
+    }
+}
+
+private val LINK_ROW_MIN_WIDTH = 380.dp
+
+/**
+ * Picks a product for an order line: search by name, SKU or category, with each product's price
+ * and the stock this order can use. Products that can't be sold are shown greyed out with why.
+ */
+@Composable
+private fun ProductPickerDialog(
+    products: List<Product>,
+    available: (Long) -> Int,
+    onPick: (Product) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var query by rememberSaveable { mutableStateOf("") }
+    val needle = query.trim().lowercase()
+    val shown = products
+        .filter { p ->
+            needle.isEmpty() || p.name.lowercase().contains(needle) || p.sku.orEmpty().lowercase().contains(needle) ||
+                p.category.lowercase().contains(needle)
+        }
+        .sortedWith(compareBy({ !it.isSellable || available(it.id) <= 0 }, { it.name.lowercase() }))
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = MaterialTheme.shapes.large,
+        containerColor = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.widthIn(max = Dimens.dialogMaxWidth).fillMaxWidth(0.92f),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        title = { Text("Choose from inventory", color = MaterialTheme.colorScheme.secondary) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Dimens.spaceS)) {
+                ShowroomSearchBar(query, { query = it }, placeholder = "Search name, SKU or category")
+                if (shown.isEmpty()) {
+                    Text("No product matches.", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(Dimens.spaceM))
+                }
+                LazyColumn(modifier = Modifier.heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(Dimens.spaceXs)) {
+                    items(shown, key = { it.id }) { product ->
+                        val units = available(product.id)
+                        val reason = when {
+                            !product.isSellable -> product.stockStatus.label
+                            units <= 0 -> "Out of stock"
+                            else -> null
+                        }
+                        Surface(
+                            onClick = { onPick(product) },
+                            enabled = reason == null,
+                            shape = MaterialTheme.shapes.medium,
+                            color = MaterialTheme.colorScheme.surface,
+                            border = BorderStroke(Dimens.border, MaterialTheme.colorScheme.outlineVariant),
+                            modifier = Modifier.fillMaxWidth().alpha(if (reason == null) 1f else 0.5f),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(Dimens.spaceM),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(Dimens.spaceM),
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(product.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(
+                                        listOfNotNull(product.sku, product.category.ifBlank { null }, Money.format(product.sellingPrice)).joinToString(" · "),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text("$units ${product.unit}", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                    Text(reason ?: "available", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /** Number field flanked by - and + buttons, for quantities where tapping beats typing. */
@@ -404,9 +642,9 @@ private fun QuantityField(
     )
 }
 
-/** The live order total. Announced politely by screen readers as it changes. */
+/** The live order total, or [problem] while it can't be worked out. Announced politely by screen readers as it changes. */
 @Composable
-private fun TotalCard(total: BigDecimal?, lines: Int, units: Int) {
+private fun TotalCard(total: BigDecimal?, lines: Int, units: Int, problem: String) {
     Surface(
         modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
         shape = MaterialTheme.shapes.medium,
@@ -422,7 +660,7 @@ private fun TotalCard(total: BigDecimal?, lines: Int, units: Int) {
                     text = if (total != null) {
                         "${if (lines == 1) "1 product" else "$lines products"} · $units ${if (units == 1) "unit" else "units"}"
                     } else {
-                        "Complete every product's price and quantity"
+                        problem
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = ShowroomTheme.colors.mutedOnTint,

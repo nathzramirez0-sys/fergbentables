@@ -439,6 +439,42 @@ class ShowroomViewModelTest {
         assertFalse(vm.uiState.value.exporting)
     }
 
+    @Test
+    fun `a buyer's profile export is downloaded or shared, for that buyer only`() = runTest {
+        val events = observe()
+
+        vm.exportBuyer(buyerId = 7, download = true)
+        advanceUntilIdle()
+        vm.exportBuyer(buyerId = 7, download = false)
+        advanceUntilIdle()
+
+        assertEquals(listOf(7L, 7L), docs.buyerWorkbooks)
+        assertEquals(0, docs.workbooksCreated) // not the full export
+        assertEquals("Download/FergBentables/Buyer_7_Profile.xlsx", events.filterIsInstance<UiEvent.WorkbookSaved>().single().savedTo)
+        assertEquals("Buyer_7_Profile.xlsx", events.filterIsInstance<UiEvent.ShareWorkbook>().single().export.displayName)
+        assertFalse(vm.uiState.value.exporting)
+    }
+
+    @Test
+    fun `deleting an order or a buyer passes on whether the items go back in stock`() = runTest {
+        vm.deleteOrder(3, restock = false)
+        advanceUntilIdle()
+        assertEquals(false, repo.lastRestock)
+
+        vm.deleteBuyer(1)
+        advanceUntilIdle()
+        assertEquals(true, repo.lastRestock) // the default
+    }
+
+    @Test
+    fun `the order form gets the inventory from the state`() = runTest {
+        val keyboard = com.blushdesk.app.data.local.database.Product(id = 4, name = "USB Keyboard", sellingPrice = Money.of("850"), quantity = 20)
+        repo.productState.value = listOf(keyboard)
+        observe()
+        advanceUntilIdle()
+        assertEquals(listOf(keyboard), vm.uiState.value.products)
+    }
+
     // ---- Operator and photos ------------------------------------------------------------------
 
     @Test

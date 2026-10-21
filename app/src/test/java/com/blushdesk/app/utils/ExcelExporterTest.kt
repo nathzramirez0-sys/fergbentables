@@ -96,7 +96,7 @@ class ExcelExporterTest {
     @Test
     fun `workbook opens on the items sheet, then the four specified sheets`() = runTest {
         XSSFWorkbook(export().inputStream()).use { wb ->
-            assertEquals(listOf("Items", "Buyers", "Orders", "Operator", "Summary"), (0 until wb.numberOfSheets).map { wb.getSheetName(it) })
+            assertEquals(listOf("Items", "Buyers", "Orders", "Operator", "Summary", "Inventory", "Stock Movements"), (0 until wb.numberOfSheets).map { wb.getSheetName(it) })
             assertEquals(0, wb.activeSheetIndex)
         }
     }

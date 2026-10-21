@@ -14,6 +14,7 @@ import com.blushdesk.app.data.local.database.BuyerListItem
 import com.blushdesk.app.data.local.database.OperatorProfile
 import com.blushdesk.app.data.local.database.Order
 import com.blushdesk.app.data.local.database.OrderItem
+import com.blushdesk.app.data.local.database.Product
 import com.blushdesk.app.data.local.database.ShowroomSummary
 import com.blushdesk.app.di.AppContainer
 import com.blushdesk.app.domain.model.BuyerDetail
@@ -58,6 +59,8 @@ class ShowroomViewModel(
     private val photos: PhotoStore,
     private val documents: DocumentService,
     private val savedState: SavedStateHandle = SavedStateHandle(),
+    /** Posts inventory notifications (a low-stock alert after an order took the last units). */
+    private val syncNotifications: suspend () -> Unit = {},
 ) : ViewModel() {
 
     private val query = MutableStateFlow("")
@@ -88,12 +91,12 @@ class ShowroomViewModel(
         }
     }
 
-    private data class Core(val operator: OperatorProfile, val summary: ShowroomSummary, val buyers: List<BuyerListItem>)
+    private data class Core(val operator: OperatorProfile, val summary: ShowroomSummary, val buyers: List<BuyerListItem>, val products: List<Product>)
     private data class Selection(val query: String, val buyerId: Long?, val detail: BuyerDetail?, val orderId: Long?, val busy: Busy)
     private data class Busy(val exporting: Boolean = false, val receiptOrderId: Long? = null)
 
     val uiState: StateFlow<ShowroomUiState> = combine(
-        combine(repository.operator, repository.summary, buyers, ::Core),
+        combine(repository.operator, repository.summary, buyers, repository.products, ::Core),
         combine(query, selectedBuyerId, detail, selectedOrderId, busy, ::Selection),
     ) { core, selection ->
         ShowroomUiState(
@@ -108,6 +111,7 @@ class ShowroomViewModel(
             selectedOrderId = selection.orderId,
             exporting = selection.busy.exporting,
             receiptOrderId = selection.busy.receiptOrderId,
+            products = core.products,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), ShowroomUiState())
 
@@ -153,8 +157,8 @@ class ShowroomViewModel(
         emitSuccess(if (isNew) "Buyer added" else "Buyer updated")
     }
 
-    fun deleteBuyer(buyerId: Long) = act("Couldn't delete the buyer. Please try again.") {
-        repository.deleteBuyer(buyerId)
+    fun deleteBuyer(buyerId: Long, restock: Boolean = true) = act("Couldn't delete the buyer. Please try again.") {
+        repository.deleteBuyer(buyerId, restock)
         emitSuccess("Buyer and their orders deleted")
     }
 
@@ -165,11 +169,12 @@ class ShowroomViewModel(
         val id = repository.saveOrder(order, items)
         if (isNew) selectedOrderId.value = id
         emitSuccess(if (isNew) "Order added" else "Order updated")
+        if (items.any { it.productId != null }) syncNotifications()
     }
 
-    fun deleteOrder(orderId: Long) = act("Couldn't delete the order. Please try again.") {
-        repository.deleteOrder(orderId)
-        emitSuccess("Order deleted")
+    fun deleteOrder(orderId: Long, restock: Boolean = true) = act("Couldn't delete the order. Please try again.") {
+        repository.deleteOrder(orderId, restock)
+        emitSuccess(if (restock) "Order deleted; its items are back in stock" else "Order deleted")
     }
 
     /** One tap on "Move to <next stage>": always exactly one stage forward, never a skip. */
@@ -224,12 +229,28 @@ class ShowroomViewModel(
         _events.send(UiEvent.WorkbookSaved(workbook, savedTo = documents.saveToDownloads(workbook)))
     }
 
-    private fun export(failure: String, deliver: suspend (ExportDocument) -> Unit) {
+    /** One buyer's profile export, downloaded to the device or shared. */
+    fun exportBuyer(buyerId: Long, download: Boolean) {
+        val failure = if (download) "Couldn't save the Excel file to this device. Please try again." else "Couldn't create the Excel file. Please try again."
+        export(failure, create = { documents.createBuyerWorkbook(buyerId) }) { workbook ->
+            if (download) {
+                _events.send(UiEvent.WorkbookSaved(workbook, savedTo = documents.saveToDownloads(workbook)))
+            } else {
+                _events.send(UiEvent.ShareWorkbook(workbook))
+            }
+        }
+    }
+
+    private fun export(
+        failure: String,
+        create: suspend () -> ExportDocument = { documents.createWorkbook() },
+        deliver: suspend (ExportDocument) -> Unit,
+    ) {
         if (busy.value.exporting) return
         busy.update { it.copy(exporting = true) }
         act(failure) {
             try {
-                deliver(documents.createWorkbook())
+                deliver(create())
             } finally {
                 busy.update { it.copy(exporting = false) }
             }
@@ -273,7 +294,13 @@ class ShowroomViewModel(
 
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
             initializer {
-                ShowroomViewModel(container.repository, container.photoStorage, container.documents, createSavedStateHandle())
+                ShowroomViewModel(
+                    repository = container.repository,
+                    photos = container.photoStorage,
+                    documents = container.documents,
+                    savedState = createSavedStateHandle(),
+                    syncNotifications = { container.notifier.sync() },
+                )
             }
         }
     }

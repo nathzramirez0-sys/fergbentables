@@ -12,6 +12,7 @@ object Formats {
     private val DATE = DateTimeFormatter.ofPattern("MMM d, yyyy", Locale.ENGLISH)
     private val TIME = DateTimeFormatter.ofPattern("h:mm a", Locale.ENGLISH)
     private val STAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd_HHmm", Locale.ENGLISH)
+    private val FILE_DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.ENGLISH)
 
     fun dateTime(instant: Instant, zone: ZoneId = ZoneId.systemDefault()): String =
         DATE_TIME.format(instant.atZone(zone))
@@ -32,7 +33,10 @@ object Formats {
     fun fileStamp(instant: Instant, zone: ZoneId = ZoneId.systemDefault()): String =
         STAMP.format(instant.atZone(zone))
 
-    /** The receipt number printed on PDFs and shown on order cards: BD-000042. */
+    /** "2026-10-20", for profile and inventory export file names. */
+    fun fileDate(instant: Instant, zone: ZoneId = ZoneId.systemDefault()): String =
+        FILE_DATE.format(instant.atZone(zone))
+
     /** A buyer's contact for one-line lists: the phone number, else "Facebook: <name>". */
     fun contactLine(phone: String, facebookName: String): String = when {
         phone.isNotBlank() -> phone
@@ -40,6 +44,7 @@ object Formats {
         else -> ""
     }
 
+    /** The receipt number printed on PDFs and shown on order cards: BD-000042. */
     fun orderNumber(orderId: Long): String = "BD-" + orderId.toString().padStart(6, '0')
 
     /** "Velvet Sofa", "Velvet Sofa + 1 more", "Velvet Sofa + 3 more": a one-line name for an order. */
@@ -49,9 +54,9 @@ object Formats {
         else -> "${productNames[0]} + ${productNames.size - 1} more"
     }
 
-    /** Two-letter avatar fallback: "Ana Reyes" -> "AR", "Cher" -> "C". */
+    /** Two-letter avatar fallback: "Ana Reyes" -> "AR", "Cher" -> "C", "Throw Pillow (Blush)" -> "TB". */
     fun initials(name: String): String {
-        val words = name.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        val words = name.split(Regex("\\s+")).map { word -> word.filter(Char::isLetterOrDigit) }.filter { it.isNotEmpty() }
         return when (words.size) {
             0 -> "?"
             1 -> words[0].take(1).uppercase()
@@ -59,7 +64,7 @@ object Formats {
         }
     }
 
-    /** Strips anything unsafe in a file name and keeps it short. */
-    fun fileSafe(text: String): String =
-        text.trim().replace(Regex("[^A-Za-z0-9]+"), "_").trim('_').take(40).ifEmpty { "buyer" }
+    /** Strips anything unsafe in a file name and keeps it short; [fallback] when nothing is left. */
+    fun fileSafe(text: String, fallback: String = "buyer"): String =
+        text.trim().replace(Regex("[^A-Za-z0-9]+"), "_").trim('_').take(40).ifEmpty { fallback }
 }

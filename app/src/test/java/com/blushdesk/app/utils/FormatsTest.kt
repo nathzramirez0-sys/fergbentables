@@ -53,6 +53,8 @@ class FormatsTest {
         assertEquals("AD", Formats.initials("Ana Maria dela Cruz Dizon"))
         assertEquals("C", Formats.initials("cher"))
         assertEquals("?", Formats.initials("   "))
+        assertEquals("TB", Formats.initials("Throw Pillow (Blush)"))
+        assertEquals("SL", Formats.initials("Sofa - L-shape"))
     }
 
     @Test

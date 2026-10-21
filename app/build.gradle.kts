@@ -26,8 +26,8 @@ android {
         // to Downloads (MediaStore) and read pictures (Photo Picker) with no storage permission.
         minSdk = 29
         targetSdk = 37
-        versionCode = 6
-        versionName = "1.1.4"
+        versionCode = 7
+        versionName = "1.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -126,6 +126,7 @@ dependencies {
     ksp(libs.androidx.room.compiler)
 
     implementation(libs.coil.compose)
+    implementation(libs.androidx.work.runtime.ktx)
 
     implementation(libs.poi.ooxml)
 
@@ -139,4 +140,5 @@ dependencies {
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.test.espresso.core)
+    androidTestImplementation(libs.androidx.work.testing)
 }

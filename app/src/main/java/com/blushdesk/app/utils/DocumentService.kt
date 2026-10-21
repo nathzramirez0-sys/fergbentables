@@ -3,6 +3,7 @@ package com.blushdesk.app.utils
 import android.content.Context
 import android.util.Log
 import com.blushdesk.app.domain.model.UserFacingException
+import com.blushdesk.app.domain.repository.InventoryRepository
 import com.blushdesk.app.domain.repository.ShowroomRepository
 import kotlinx.coroutines.CancellationException
 import java.io.File
@@ -29,6 +30,15 @@ interface DocumentService {
     /** The .xlsx with every record in the database. */
     suspend fun createWorkbook(): ExportDocument
 
+    /** One buyer's profile, items and orders: Juan_Dela_Cruz_Profile_2026-10-20.xlsx. */
+    suspend fun createBuyerWorkbook(buyerId: Long): ExportDocument
+
+    /** One product's details, stock history and sales: USB_Keyboard_Inventory_2026-10-20.xlsx. */
+    suspend fun createProductWorkbook(productId: Long): ExportDocument
+
+    /** Every product and stock movement with the inventory figures: Inventory_Report_2026-10-20.xlsx. */
+    suspend fun createInventoryWorkbook(): ExportDocument
+
     /** Copies [export] to Downloads and returns where it landed ("Download/<APP_NAME>/<name>"). */
     suspend fun saveToDownloads(export: ExportDocument): String
 }
@@ -36,6 +46,7 @@ interface DocumentService {
 class AndroidDocumentService(
     private val context: Context,
     private val repository: ShowroomRepository,
+    private val inventory: InventoryRepository,
     private val excel: ExcelExporter,
     private val pdf: PdfReceiptGenerator,
     private val downloads: DownloadsSaver,
@@ -66,11 +77,39 @@ class AndroidDocumentService(
 
     override suspend fun createWorkbook(): ExportDocument {
         val snapshot = repository.getExportSnapshot()
-        if (snapshot.buyers.isEmpty()) throw UserFacingException("There is nothing to export yet. Add a buyer first.")
+        if (snapshot.buyers.isEmpty() && snapshot.products.isEmpty()) {
+            throw UserFacingException("There is nothing to export yet. Add a buyer or a product first.")
+        }
 
         val folder = AppFiles.cacheDir(context, AppFiles.EXPORTS_DIR)
         val name = "${APP_NAME}_Export_${Formats.fileStamp(snapshot.takenAt)}.xlsx"
         val file = excel.export(File(folder, name), snapshot)
+        AppFiles.prune(folder, keep = 5)
+        return ExportDocument(file, name)
+    }
+
+    override suspend fun createBuyerWorkbook(buyerId: Long): ExportDocument {
+        val report = repository.getBuyerReport(buyerId)
+        val name = "${Formats.fileSafe(report.buyer.buyer.fullName)}_Profile_${Formats.fileDate(report.takenAt)}.xlsx"
+        return exportFile(name) { excel.exportBuyer(it, report) }
+    }
+
+    override suspend fun createProductWorkbook(productId: Long): ExportDocument {
+        val report = inventory.getProductReport(productId)
+        val name = "${Formats.fileSafe(report.product.name, fallback = "product")}_Inventory_${Formats.fileDate(report.takenAt)}.xlsx"
+        return exportFile(name) { excel.exportProduct(it, report) }
+    }
+
+    override suspend fun createInventoryWorkbook(): ExportDocument {
+        val report = inventory.getInventoryReport()
+        val name = "Inventory_Report_${Formats.fileDate(report.takenAt)}.xlsx"
+        return exportFile(name) { excel.exportInventory(it, report) }
+    }
+
+    /** Writes an export into the shared exports cache folder and keeps only the newest few there. */
+    private suspend fun exportFile(name: String, write: suspend (File) -> File): ExportDocument {
+        val folder = AppFiles.cacheDir(context, AppFiles.EXPORTS_DIR)
+        val file = write(File(folder, name))
         AppFiles.prune(folder, keep = 5)
         return ExportDocument(file, name)
     }

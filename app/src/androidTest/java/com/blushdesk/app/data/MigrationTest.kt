@@ -7,6 +7,7 @@ import com.blushdesk.app.data.local.database.AppDatabase
 import com.blushdesk.app.data.local.database.MIGRATION_1_2
 import com.blushdesk.app.data.local.database.MIGRATION_2_3
 import com.blushdesk.app.data.local.database.MIGRATION_3_4
+import com.blushdesk.app.data.local.database.MIGRATION_4_5
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -167,6 +168,53 @@ class MigrationTest {
     }
 
     @Test
+    fun migrate_4_to_5_adds_the_inventory_and_keeps_every_order_line() {
+        helper.createDatabase(dbName, 4).apply {
+            execSQL(
+                "INSERT INTO buyers (id, fullName, contactNumber, facebookName, email, dateAdded, profileImageUri, createdAt, updatedAt) " +
+                    "VALUES (1, 'Ana', '0917 123 4567', '', '', 1000, NULL, 1000, 1000)",
+            )
+            execSQL(
+                "INSERT INTO orders (id, buyerId, totalAmount, purchaseDateTime, paymentMode, paymentStatus, fulfillmentStatus, createdAt, updatedAt) " +
+                    "VALUES (7, 1, 545000, 2000, 'CASH', 'PAID', 'DELIVERED', 2000, 2000)",
+            )
+            execSQL("INSERT INTO order_items (id, orderId, position, productName, unitPrice, quantity, lineTotal) VALUES (70, 7, 0, 'Side Table', 350000, 1, 350000)")
+            execSQL("INSERT INTO order_items (id, orderId, position, productName, unitPrice, quantity, lineTotal) VALUES (71, 7, 1, 'Throw Pillow', 45000, 4, 180000)")
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(dbName, 5, true, MIGRATION_4_5)
+
+        db.query("SELECT id, orderId, position, productName, unitPrice, quantity, lineTotal, productId FROM order_items ORDER BY id").use { c ->
+            assertEquals(2, c.count)
+            c.moveToFirst()
+            assertEquals(70L, c.getLong(0))
+            assertEquals("Side Table", c.getString(3))
+            assertEquals(350000L, c.getLong(4))
+            assertTrue("old lines are custom items, not linked to stock", c.isNull(7))
+            c.moveToNext()
+            assertEquals(71L, c.getLong(0))
+            assertEquals(4, c.getInt(5))
+        }
+        db.query("SELECT COUNT(*) FROM products").use { c ->
+            c.moveToFirst()
+            assertEquals(0, c.getInt(0))
+        }
+        // The new tables work: a product with a movement, linked to the old order's new line.
+        db.execSQL(
+            "INSERT INTO products (id, sku, name, category, description, sellingPrice, costPrice, quantity, minimumStock, unit, " +
+                "availability, archived, imageUri, reminderInterval, reminderLastSentAt, reminderNextAt, lowStockAlerted, createdAt, updatedAt) " +
+                "VALUES (1, 'KB-01', 'USB Keyboard', '', '', 85000, NULL, 20, 5, 'pc', 'AVAILABLE', 0, NULL, 'NEVER', NULL, NULL, 0, 3000, 3000)",
+        )
+        db.execSQL(
+            "INSERT INTO stock_movements (productId, type, previousQuantity, change, newQuantity, orderId, reason, supplier, reference, performedBy, occurredAt, createdAt) " +
+                "VALUES (1, 'INITIAL', 0, 20, 20, NULL, '', '', '', 'Lia', 3000, 3000)",
+        )
+        db.execSQL("INSERT INTO order_items (orderId, position, productName, unitPrice, quantity, lineTotal, productId) VALUES (7, 2, 'USB Keyboard', 85000, 1, 85000, 1)")
+        db.close()
+    }
+
+    @Test
     fun first_release_data_survives_every_migration() {
         helper.createDatabase(dbName, 1).apply {
             execSQL("INSERT INTO buyers (id, fullName, contact, email, dateAdded, photoPath) VALUES (1, 'Ben', '0918 765 4321', '', 1000, NULL)")
@@ -177,7 +225,7 @@ class MigrationTest {
             close()
         }
 
-        val db = helper.runMigrationsAndValidate(dbName, 4, true, MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+        val db = helper.runMigrationsAndValidate(dbName, 5, true, MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
 
         db.query("SELECT contactNumber, facebookName FROM buyers").use { c ->
             assertTrue(c.moveToFirst())

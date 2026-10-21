@@ -154,3 +154,80 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         db.execSQL("ALTER TABLE `buyers` ADD COLUMN `facebookName` TEXT NOT NULL DEFAULT ''")
     }
 }
+
+/**
+ * Version 4 -> 5: the inventory. Three new tables (products, their stock movements, inventory
+ * notifications) and an optional productId on every order line. Existing lines keep a null
+ * productId: they were typed in by hand before products existed and never touch stock.
+ *
+ * SQLite cannot add a foreign key to an existing table, so `order_items` is rebuilt the same way
+ * as in [MIGRATION_1_2]: new shape, copy the rows (ids included), drop, rename.
+ */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `products` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `sku` TEXT, `name` TEXT NOT NULL,
+                `category` TEXT NOT NULL, `description` TEXT NOT NULL, `sellingPrice` INTEGER NOT NULL,
+                `costPrice` INTEGER, `quantity` INTEGER NOT NULL, `minimumStock` INTEGER NOT NULL,
+                `unit` TEXT NOT NULL, `availability` TEXT NOT NULL, `archived` INTEGER NOT NULL,
+                `imageUri` TEXT, `reminderInterval` TEXT NOT NULL, `reminderLastSentAt` INTEGER,
+                `reminderNextAt` INTEGER, `lowStockAlerted` INTEGER NOT NULL,
+                `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL)
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_products_sku` ON `products` (`sku`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_products_name` ON `products` (`name`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_products_archived` ON `products` (`archived`)")
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `stock_movements` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `productId` INTEGER NOT NULL,
+                `type` TEXT NOT NULL, `previousQuantity` INTEGER NOT NULL, `change` INTEGER NOT NULL,
+                `newQuantity` INTEGER NOT NULL, `orderId` INTEGER, `reason` TEXT NOT NULL,
+                `supplier` TEXT NOT NULL, `reference` TEXT NOT NULL, `performedBy` TEXT NOT NULL,
+                `occurredAt` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL,
+                FOREIGN KEY(`productId`) REFERENCES `products`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_stock_movements_productId` ON `stock_movements` (`productId`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_stock_movements_orderId` ON `stock_movements` (`orderId`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_stock_movements_occurredAt` ON `stock_movements` (`occurredAt`)")
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `inventory_notifications` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `productId` INTEGER NOT NULL,
+                `kind` TEXT NOT NULL, `title` TEXT NOT NULL, `message` TEXT NOT NULL,
+                `dedupKey` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `readAt` INTEGER, `postedAt` INTEGER,
+                FOREIGN KEY(`productId`) REFERENCES `products`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_inventory_notifications_productId` ON `inventory_notifications` (`productId`)")
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_inventory_notifications_dedupKey` ON `inventory_notifications` (`dedupKey`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_inventory_notifications_createdAt` ON `inventory_notifications` (`createdAt`)")
+
+        db.execSQL(
+            """
+            CREATE TABLE `order_items_new` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `orderId` INTEGER NOT NULL,
+                `position` INTEGER NOT NULL, `productName` TEXT NOT NULL, `unitPrice` INTEGER NOT NULL,
+                `quantity` INTEGER NOT NULL, `lineTotal` INTEGER NOT NULL, `productId` INTEGER,
+                FOREIGN KEY(`orderId`) REFERENCES `orders`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
+                FOREIGN KEY(`productId`) REFERENCES `products`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT)
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            INSERT INTO `order_items_new` (id, orderId, position, productName, unitPrice, quantity, lineTotal, productId)
+            SELECT id, orderId, position, productName, unitPrice, quantity, lineTotal, NULL FROM `order_items`
+            """.trimIndent(),
+        )
+        db.execSQL("DROP TABLE `order_items`")
+        db.execSQL("ALTER TABLE `order_items_new` RENAME TO `order_items`")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_order_items_orderId` ON `order_items` (`orderId`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_order_items_productId` ON `order_items` (`productId`)")
+    }
+}

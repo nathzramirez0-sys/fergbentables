@@ -4,8 +4,15 @@ import com.blushdesk.app.data.local.database.Buyer
 import com.blushdesk.app.data.local.database.BuyerWithOrders
 import com.blushdesk.app.data.local.database.ExportSummary
 import com.blushdesk.app.data.local.database.OperatorProfile
+import com.blushdesk.app.data.local.database.InventorySummary
+import com.blushdesk.app.data.local.database.MovementRow
 import com.blushdesk.app.data.local.database.OrderWithItems
+import com.blushdesk.app.data.local.database.Product
+import com.blushdesk.app.data.local.database.ProductSale
+import com.blushdesk.app.domain.model.BuyerReport
 import com.blushdesk.app.domain.model.ExportSnapshot
+import com.blushdesk.app.domain.model.InventoryReport
+import com.blushdesk.app.domain.model.ProductReport
 import com.blushdesk.app.domain.model.PaymentStatus
 import com.blushdesk.app.ui.theme.BrandPalette
 import kotlinx.coroutines.Dispatchers
@@ -27,13 +34,18 @@ import org.apache.poi.xssf.usermodel.XSSFSheet
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.io.File
 import java.io.FileOutputStream
+import java.time.Instant
 import java.time.ZoneId
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 
 /**
- * Writes the whole database to a formatted .xlsx with five sheets: Items (opens first), Buyers,
- * Orders, Operator and Summary. Runs on [Dispatchers.IO].
+ * Writes formatted .xlsx workbooks, on [Dispatchers.IO]:
+ *  - [export]: the whole database. Items (opens first), Buyers, Orders, Operator, Summary, and the
+ *    inventory's Inventory and Stock Movements sheets.
+ *  - [exportBuyer]: one buyer's profile, items and orders, and nobody else's.
+ *  - [exportProduct]: one product's details, stock history and sales.
+ *  - [exportInventory]: the inventory report (products, movements, figures).
  *
  * Apache POI is a desktop-Java library, so a few of its habits are avoided on purpose:
  *  - No `autoSizeColumn`: it measures text with java.awt.font, which Android does not have.
@@ -50,26 +62,75 @@ import java.util.zip.ZipFile
  */
 class ExcelExporter(private val zone: ZoneId = ZoneId.systemDefault()) {
 
-    /** Builds the workbook for [snapshot] into [destination] and returns it. */
-    suspend fun export(destination: File, snapshot: ExportSnapshot): File = withContext(Dispatchers.IO) {
+    /** Builds the full workbook for [snapshot] into [destination] and returns it. */
+    suspend fun export(destination: File, snapshot: ExportSnapshot): File {
+        val store = snapshot.operator.storeName.ifBlank { "Showroom" }
+        return write(destination, "$store export") { workbook, styles ->
+            writeItems(workbook.createSheet(SHEET_ITEMS), styles, snapshot.buyers)
+            writeBuyers(workbook.createSheet(SHEET_BUYERS), styles, snapshot.buyers)
+            writeOrders(workbook.createSheet(SHEET_ORDERS), styles, snapshot.buyers)
+            writeOperator(workbook.createSheet(SHEET_OPERATOR), styles, snapshot.operator)
+            val inventoryLines = snapshot.inventory?.let { inventoryLines(it, detailed = false) }.orEmpty()
+            writeSummary(
+                workbook.createSheet(SHEET_SUMMARY), styles, "$store - Summary", snapshot.takenAt,
+                summaryLines(snapshot.summary) + inventoryLines,
+            )
+            writeInventory(workbook.createSheet(SHEET_INVENTORY), styles, snapshot.products)
+            writeMovements(workbook.createSheet(SHEET_MOVEMENTS), styles, snapshot.movements)
+        }
+    }
+
+    /** One buyer's profile export: Profile, then their Items and Orders. Nothing about other buyers. */
+    suspend fun exportBuyer(destination: File, report: BuyerReport): File {
+        val buyer = report.buyer.buyer
+        return write(destination, "${buyer.fullName} profile") { workbook, styles ->
+            writeDetails(workbook.createSheet(SHEET_PROFILE), styles, "${buyer.fullName} - Profile", report.takenAt, buyerDetails(report))
+            writeItems(workbook.createSheet(SHEET_ITEMS), styles, listOf(report.buyer))
+            writeOrders(workbook.createSheet(SHEET_ORDERS), styles, listOf(report.buyer))
+        }
+    }
+
+    /** One product's profile export: Product details, its Stock Movements and its Sales. */
+    suspend fun exportProduct(destination: File, report: ProductReport): File {
+        val product = report.product
+        return write(destination, "${product.name} inventory") { workbook, styles ->
+            writeDetails(workbook.createSheet(SHEET_PRODUCT), styles, "${product.name} - Inventory", report.takenAt, productDetails(report))
+            writeMovements(workbook.createSheet(SHEET_MOVEMENTS), styles, report.movements)
+            writeSales(workbook.createSheet(SHEET_SALES), styles, report.sales)
+        }
+    }
+
+    /** The inventory report: every product, every stock movement, and the inventory figures. */
+    suspend fun exportInventory(destination: File, report: InventoryReport): File {
+        val store = report.operator.storeName.ifBlank { "Showroom" }
+        return write(destination, "$store inventory report") { workbook, styles ->
+            writeInventory(workbook.createSheet(SHEET_INVENTORY), styles, report.products)
+            writeMovements(workbook.createSheet(SHEET_MOVEMENTS), styles, report.movements)
+            writeSummary(
+                workbook.createSheet(SHEET_SUMMARY), styles, "$store - Inventory", report.takenAt,
+                inventoryLines(report.summary, detailed = true),
+            )
+        }
+    }
+
+    /**
+     * Writes a workbook built by [build] to [destination]: formulas evaluated, written to a raw
+     * file, rewritten as a plain ZIP into a `.part` file, then renamed into place.
+     */
+    private suspend fun write(destination: File, title: String, build: (XSSFWorkbook, Styles) -> Unit): File = withContext(Dispatchers.IO) {
         val folder = destination.absoluteFile.parentFile
         folder?.mkdirs()
         val raw = File(folder, destination.name + ".raw")
         val partial = File(folder, destination.name + ".part")
         try {
             XSSFWorkbook().use { workbook ->
-                val styles = Styles(workbook)
-                writeItems(workbook.createSheet(SHEET_ITEMS), styles, snapshot.buyers)
-                writeBuyers(workbook.createSheet(SHEET_BUYERS), styles, snapshot.buyers)
-                writeOrders(workbook.createSheet(SHEET_ORDERS), styles, snapshot.buyers)
-                writeOperator(workbook.createSheet(SHEET_OPERATOR), styles, snapshot.operator)
-                writeSummary(workbook.createSheet(SHEET_SUMMARY), styles, snapshot)
+                build(workbook, Styles(workbook))
                 // Store each formula's result next to it, for viewers that never calculate.
                 XSSFFormulaEvaluator.evaluateAllFormulaCells(workbook)
 
                 workbook.properties.coreProperties.apply {
                     creator = APP_NAME
-                    title = "${snapshot.operator.storeName.ifBlank { "Showroom" }} export"
+                    this.title = title
                 }
                 FileOutputStream(raw).use { workbook.write(it) }
             }
@@ -269,32 +330,48 @@ class ExcelExporter(private val zone: ZoneId = ZoneId.systemDefault()) {
 
     // ---- Worksheet 5: Summary ---------------------------------------------------------------
 
-    private fun writeSummary(sheet: XSSFSheet, styles: Styles, snapshot: ExportSnapshot) {
+    private fun writeSummary(sheet: XSSFSheet, styles: Styles, title: String, takenAt: Instant, lines: List<Pair<String, SummaryValue>>) =
+        writeKeyValues(sheet, styles, title, takenAt, "Metric", lines, valueWidth = 22)
+
+    /** A details sheet (one buyer, one product): the same title-and-two-columns layout as Summary. */
+    private fun writeDetails(sheet: XSSFSheet, styles: Styles, title: String, takenAt: Instant, lines: List<Pair<String, SummaryValue>>) =
+        writeKeyValues(sheet, styles, title, takenAt, "Field", lines, valueWidth = 44)
+
+    private fun writeKeyValues(
+        sheet: XSSFSheet,
+        styles: Styles,
+        title: String,
+        takenAt: Instant,
+        keyTitle: String,
+        lines: List<Pair<String, SummaryValue>>,
+        valueWidth: Int,
+    ) {
         sheet.setColumnWidth(0, 30 * 256)
-        sheet.setColumnWidth(1, 22 * 256)
+        sheet.setColumnWidth(1, valueWidth * 256)
         sheet.setDisplayGridlines(false)
 
-        val store = snapshot.operator.storeName.ifBlank { "Showroom" }
         sheet.createRow(0).apply {
             heightInPoints = 30f
-            text(0, "$store - Summary", styles.title)
+            text(0, title, styles.title)
         }
         sheet.addMergedRegion(CellRangeAddress(0, 0, 0, 1))
-        sheet.createRow(1).text(0, "Generated ${Formats.dateTime(snapshot.takenAt, zone)}", styles.subtitle)
+        sheet.createRow(1).text(0, "Generated ${Formats.dateTime(takenAt, zone)}", styles.subtitle)
 
         val headerRow = SUMMARY_HEADER_ROW
         sheet.createRow(headerRow).apply {
             heightInPoints = 22f
-            text(0, "Metric", styles.header)
+            text(0, keyTitle, styles.header)
             text(1, "Value", styles.header)
         }
-        summaryLines(snapshot.summary).forEachIndexed { index, (label, value) ->
+        lines.forEachIndexed { index, (label, value) ->
             val zebra = index % 2 == 1
             sheet.createRow(headerRow + 1 + index).apply {
                 text(0, label, styles.label(zebra))
                 when (value) {
                     is SummaryValue.Count -> number(1, value.count.toDouble(), styles.body(Kind.COUNT, zebra))
                     is SummaryValue.Amount -> number(1, Money.toExcelNumber(value.amount), styles.body(Kind.MONEY_BOLD, zebra))
+                    is SummaryValue.Text -> text(1, value.text, styles.body(Kind.TEXT, zebra))
+                    is SummaryValue.Badge -> text(1, value.text, styles.badge(value.tone))
                 }
             }
         }
@@ -304,6 +381,163 @@ class ExcelExporter(private val zone: ZoneId = ZoneId.systemDefault()) {
     private sealed interface SummaryValue {
         data class Count(val count: Int) : SummaryValue
         data class Amount(val amount: java.math.BigDecimal) : SummaryValue
+        data class Text(val text: String) : SummaryValue
+        data class Badge(val text: String, val tone: BrandPalette.Tone) : SummaryValue
+    }
+
+    /** Inventory figures, for the full export's Summary ([detailed] = false) and the inventory report. */
+    private fun inventoryLines(s: InventorySummary, detailed: Boolean): List<Pair<String, SummaryValue>> = buildList {
+        add("Total Products" to SummaryValue.Count(s.totalProducts))
+        add("Total Stock Units" to SummaryValue.Count(s.totalUnits))
+        add("Products In Stock" to SummaryValue.Count(s.inStock))
+        add("Low Stock Products" to SummaryValue.Count(s.lowStock))
+        add("Out of Stock Products" to SummaryValue.Count(s.outOfStock))
+        add("Unavailable Products" to SummaryValue.Count(s.unavailable))
+        if (detailed) add("Archived Products" to SummaryValue.Count(s.archived))
+        add("Stock Value (Selling Price)" to SummaryValue.Amount(s.stockValue))
+        if (detailed) {
+            add("Stock Value (Cost Price)" to SummaryValue.Amount(s.costValue))
+            add("Units Sold" to SummaryValue.Count(s.unitsSold))
+            add("Units Restocked" to SummaryValue.Count(s.unitsRestocked))
+        }
+    }
+
+    private fun buyerDetails(report: BuyerReport): List<Pair<String, SummaryValue>> {
+        val buyer = report.buyer.buyer
+        val orders = report.buyer.orders
+        val total = orders.fold(Money.ZERO) { sum, o -> sum + o.order.totalAmount }
+        val paid = orders.filter { it.order.paymentStatus.isPaid }.fold(Money.ZERO) { sum, o -> sum + o.order.totalAmount }
+        val status = buyerPaymentStatus(orders)
+        return listOf(
+            "Buyer ID" to SummaryValue.Text(buyer.id.toString()),
+            "Full Name" to SummaryValue.Text(buyer.fullName),
+            "Contact Number" to SummaryValue.Text(buyer.contactNumber),
+            "Facebook Name" to SummaryValue.Text(buyer.facebookName),
+            "Email" to SummaryValue.Text(buyer.email),
+            "Date Added" to SummaryValue.Text(Formats.date(buyer.dateAdded, zone)),
+            "Number of Orders" to SummaryValue.Count(orders.size),
+            "Units Purchased" to SummaryValue.Count(orders.sumOf { it.unitCount }),
+            "Total Amount" to SummaryValue.Amount(total),
+            "Paid" to SummaryValue.Amount(paid),
+            "Outstanding" to SummaryValue.Amount(total - paid),
+            "Payment Status" to when (status) {
+                PAID -> SummaryValue.Badge(status, BrandPalette.tone(PaymentStatus.PAID))
+                NOT_YET_PAID -> SummaryValue.Badge(status, BrandPalette.tone(PaymentStatus.UNPAID))
+                else -> SummaryValue.Text(status)
+            },
+        )
+    }
+
+    private fun productDetails(report: ProductReport): List<Pair<String, SummaryValue>> {
+        val p = report.product
+        val status = p.stockStatus
+        val sold = report.sales.sumOf { it.quantity }
+        return listOf(
+            "Product ID" to SummaryValue.Text(p.id.toString()),
+            "SKU" to SummaryValue.Text(p.sku.orEmpty()),
+            "Product Name" to SummaryValue.Text(p.name),
+            "Category" to SummaryValue.Text(p.category),
+            "Description" to SummaryValue.Text(p.description),
+            "Unit" to SummaryValue.Text(p.unit),
+            "Selling Price" to SummaryValue.Amount(p.sellingPrice),
+            "Cost Price" to (p.costPrice?.let { SummaryValue.Amount(it) } ?: SummaryValue.Text("Not set")),
+            "Current Stock" to SummaryValue.Count(p.quantity),
+            "Minimum Stock" to SummaryValue.Count(p.minimumStock),
+            "Stock Status" to SummaryValue.Badge(status.label, BrandPalette.tone(status)),
+            "Availability" to SummaryValue.Text(p.availability.label),
+            "Stock Value" to SummaryValue.Amount(Money.total(p.sellingPrice, p.quantity)),
+            "Units Sold (on current orders)" to SummaryValue.Count(sold),
+            "Stock Reminder" to SummaryValue.Text(p.reminderInterval.label),
+            "Created" to SummaryValue.Text(Formats.dateTime(p.createdAt, zone)),
+            "Last Updated" to SummaryValue.Text(Formats.dateTime(p.updatedAt, zone)),
+        )
+    }
+
+    // ---- Inventory sheets -------------------------------------------------------------------
+
+    /** Every product, archived ones included (their status says so), one row each. */
+    private fun writeInventory(sheet: XSSFSheet, styles: Styles, products: List<Product>) {
+        writeHeader(sheet, styles, INVENTORY_COLUMNS, widths = listOf(11, 14, 30, 18, 8, 15, 15, 14, 14, 15, 15, 16, 16, 18))
+        products.forEachIndexed { index, p ->
+            val zebra = index % 2 == 1
+            val status = p.stockStatus
+            sheet.createRow(index + 1).apply {
+                number(0, p.id.toDouble(), styles.body(Kind.ID, zebra))
+                text(1, p.sku.orEmpty(), styles.body(Kind.TEXT, zebra))
+                text(2, p.name, styles.body(Kind.TEXT, zebra))
+                text(3, p.category, styles.body(Kind.TEXT, zebra))
+                text(4, p.unit, styles.body(Kind.TEXT, zebra))
+                number(5, Money.toExcelNumber(p.sellingPrice), styles.body(Kind.MONEY, zebra))
+                p.costPrice?.let { number(6, Money.toExcelNumber(it), styles.body(Kind.MONEY, zebra)) } ?: text(6, "", styles.body(Kind.TEXT, zebra))
+                number(7, p.quantity.toDouble(), styles.body(Kind.COUNT, zebra))
+                number(8, p.minimumStock.toDouble(), styles.body(Kind.COUNT, zebra))
+                text(9, status.label, styles.badge(BrandPalette.tone(status)))
+                text(10, p.availability.label, styles.body(Kind.TEXT, zebra))
+                number(11, Money.toExcelNumber(Money.total(p.sellingPrice, p.quantity)), styles.body(Kind.MONEY, zebra))
+                text(12, p.reminderInterval.label, styles.body(Kind.TEXT, zebra))
+                createCell(13).apply {
+                    setCellValue(p.updatedAt.atZone(zone).toLocalDateTime())
+                    cellStyle = styles.body(Kind.DATE_TIME, zebra)
+                }
+            }
+        }
+        if (products.isEmpty()) sheet.createRow(1).text(0, "No products yet", styles.subtitle)
+        finishTable(sheet, INVENTORY_COLUMNS.size, products.size)
+    }
+
+    /** The audit trail, oldest first: every change to every quantity, with who and why. */
+    private fun writeMovements(sheet: XSSFSheet, styles: Styles, movements: List<MovementRow>) {
+        writeHeader(sheet, styles, MOVEMENT_COLUMNS, widths = listOf(14, 11, 11, 14, 28, 20, 12, 10, 12, 13, 34, 20, 16, 18))
+        movements.forEachIndexed { index, row ->
+            val m = row.movement
+            val zebra = index % 2 == 1
+            val at = m.occurredAt.atZone(zone)
+            sheet.createRow(index + 1).apply {
+                createCell(0).apply {
+                    setCellValue(at.toLocalDate())
+                    cellStyle = styles.body(Kind.DATE, zebra)
+                }
+                number(1, at.toLocalTime().toSecondOfDay() / SECONDS_PER_DAY, styles.body(Kind.TIME, zebra))
+                number(2, m.productId.toDouble(), styles.body(Kind.ID, zebra))
+                text(3, row.productSku.orEmpty(), styles.body(Kind.TEXT, zebra))
+                text(4, row.productName, styles.body(Kind.TEXT, zebra))
+                text(5, m.type.label, styles.body(Kind.TEXT, zebra))
+                number(6, m.previousQuantity.toDouble(), styles.body(Kind.COUNT, zebra))
+                number(7, m.change.toDouble(), styles.body(Kind.SIGNED, zebra))
+                number(8, m.newQuantity.toDouble(), styles.body(Kind.COUNT, zebra))
+                text(9, m.orderId?.let(Formats::orderNumber).orEmpty(), styles.body(Kind.TEXT, zebra))
+                text(10, m.reason, styles.body(Kind.TEXT, zebra))
+                text(11, m.supplier, styles.body(Kind.TEXT, zebra))
+                text(12, m.reference, styles.body(Kind.TEXT, zebra))
+                text(13, m.performedBy, styles.body(Kind.TEXT, zebra))
+            }
+        }
+        if (movements.isEmpty()) sheet.createRow(1).text(0, "No stock movements yet", styles.subtitle)
+        finishTable(sheet, MOVEMENT_COLUMNS.size, movements.size)
+    }
+
+    /** Every order line that sold one product, oldest first. */
+    private fun writeSales(sheet: XSSFSheet, styles: Styles, sales: List<ProductSale>) {
+        writeHeader(sheet, styles, SALE_COLUMNS, widths = listOf(13, 26, 14, 11, 10, 15, 15, 16, 18))
+        sales.forEachIndexed { index, sale ->
+            val zebra = index % 2 == 1
+            sheet.createRow(index + 1).apply {
+                text(0, Formats.orderNumber(sale.orderId), styles.body(Kind.TEXT, zebra))
+                text(1, sale.buyerName, styles.body(Kind.TEXT, zebra))
+                createCell(2).apply {
+                    setCellValue(sale.purchaseDateTime.atZone(zone).toLocalDate())
+                    cellStyle = styles.body(Kind.DATE, zebra)
+                }
+                number(3, sale.purchaseDateTime.atZone(zone).toLocalTime().toSecondOfDay() / SECONDS_PER_DAY, styles.body(Kind.TIME, zebra))
+                number(4, sale.quantity.toDouble(), styles.body(Kind.COUNT, zebra))
+                number(5, Money.toExcelNumber(sale.unitPrice), styles.body(Kind.MONEY, zebra))
+                number(6, Money.toExcelNumber(sale.lineTotal), styles.body(Kind.MONEY, zebra))
+                text(7, sale.paymentStatus.label, styles.badge(BrandPalette.tone(sale.paymentStatus)))
+                text(8, sale.fulfillmentStatus.label, styles.badge(BrandPalette.tone(sale.fulfillmentStatus)))
+            }
+        }
+        if (sales.isEmpty()) sheet.createRow(1).text(0, "Not on any order yet", styles.subtitle)
+        finishTable(sheet, SALE_COLUMNS.size, sales.size)
     }
 
     private fun summaryLines(s: ExportSummary): List<Pair<String, SummaryValue>> = listOf(
@@ -370,7 +604,7 @@ class ExcelExporter(private val zone: ZoneId = ZoneId.systemDefault()) {
         }
     }
 
-    private enum class Kind { TEXT, ID, COUNT, MONEY, MONEY_BOLD, DATE, TIME }
+    private enum class Kind { TEXT, ID, COUNT, SIGNED, MONEY, MONEY_BOLD, DATE, TIME, DATE_TIME }
 
     /**
      * Cell styles are workbook-wide objects with a hard cap (64,000 in .xlsx), so each distinct
@@ -435,11 +669,13 @@ class ExcelExporter(private val zone: ZoneId = ZoneId.systemDefault()) {
                 Kind.TEXT -> Unit
                 Kind.ID -> dataFormat = formats.getFormat("0")
                 Kind.COUNT -> dataFormat = formats.getFormat("#,##0")
+                Kind.SIGNED -> dataFormat = formats.getFormat("+#,##0;-#,##0;0")
                 Kind.MONEY, Kind.MONEY_BOLD -> dataFormat = formats.getFormat("\"${Money.SYMBOL}\"#,##0.00")
                 Kind.DATE -> dataFormat = formats.getFormat("d mmm yyyy")
                 Kind.TIME -> dataFormat = formats.getFormat("h:mm AM/PM")
+                Kind.DATE_TIME -> dataFormat = formats.getFormat("d mmm yyyy h:mm AM/PM")
             }
-            if (kind == Kind.DATE || kind == Kind.TIME || kind == Kind.ID) alignment = HorizontalAlignment.LEFT
+            if (kind == Kind.DATE || kind == Kind.TIME || kind == Kind.DATE_TIME || kind == Kind.ID) alignment = HorizontalAlignment.LEFT
         }
 
         fun badge(tone: BrandPalette.Tone): XSSFCellStyle = cached("badge-${tone.foreground}-${tone.background}") {
@@ -494,6 +730,11 @@ class ExcelExporter(private val zone: ZoneId = ZoneId.systemDefault()) {
         const val SHEET_ORDERS = "Orders"
         const val SHEET_OPERATOR = "Operator"
         const val SHEET_SUMMARY = "Summary"
+        const val SHEET_INVENTORY = "Inventory"
+        const val SHEET_MOVEMENTS = "Stock Movements"
+        const val SHEET_PROFILE = "Profile"
+        const val SHEET_PRODUCT = "Product"
+        const val SHEET_SALES = "Sales"
 
         /** Row index of the "Metric | Value" header on the Summary sheet (after title and timestamp). */
         const val SUMMARY_HEADER_ROW = 3
@@ -526,6 +767,22 @@ class ExcelExporter(private val zone: ZoneId = ZoneId.systemDefault()) {
         )
 
         val OPERATOR_COLUMNS = listOf("Operator Name", "Store Name", "Email", "Phone Number")
+
+        val INVENTORY_COLUMNS = listOf(
+            "Product ID", "SKU", "Product Name", "Category", "Unit", "Selling Price", "Cost Price",
+            "Current Stock", "Minimum Stock", "Stock Status", "Availability", "Stock Value",
+            "Stock Reminder", "Last Updated",
+        )
+
+        val MOVEMENT_COLUMNS = listOf(
+            "Date", "Time", "Product ID", "SKU", "Product", "Movement", "Previous Stock", "Change",
+            "New Stock", "Order", "Reason / Notes", "Supplier", "Reference", "Performed By",
+        )
+
+        val SALE_COLUMNS = listOf(
+            "Order", "Buyer", "Purchase Date", "Time", "Quantity", "Unit Price", "Line Total",
+            "Payment Status", "Fulfillment Status",
+        )
 
         private const val SECONDS_PER_DAY = 86_400.0
     }

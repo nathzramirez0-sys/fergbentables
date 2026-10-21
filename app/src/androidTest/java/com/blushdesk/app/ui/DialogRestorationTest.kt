@@ -13,6 +13,7 @@ import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.core.app.ApplicationProvider
@@ -57,6 +58,9 @@ class DialogRestorationTest {
     private val noDocuments = object : DocumentService {
         override suspend fun createReceipt(orderId: Long): ReceiptDocument = error("unused")
         override suspend fun createWorkbook(): ExportDocument = error("unused")
+        override suspend fun createBuyerWorkbook(buyerId: Long): ExportDocument = error("unused")
+        override suspend fun createProductWorkbook(productId: Long): ExportDocument = error("unused")
+        override suspend fun createInventoryWorkbook(): ExportDocument = error("unused")
         override suspend fun saveToDownloads(export: ExportDocument): String = error("unused")
     }
 
@@ -92,7 +96,7 @@ class DialogRestorationTest {
 
     @Test
     fun an_order_being_edited_stays_open_with_its_changes() {
-        compose.onNodeWithContentDescription("Edit order", substring = true).performClick()
+        compose.onNodeWithContentDescription("Edit order", substring = true).performScrollTo().performClick()
         // The order card behind the dialog says "Velvet Sofa" too, so aim at the text field.
         compose.onNode(hasSetTextAction() and hasText("Velvet Sofa", substring = true)).performTextReplacement("Velvet Sofa, Blush")
 
@@ -104,7 +108,7 @@ class DialogRestorationTest {
 
     @Test
     fun a_form_for_an_order_that_is_deleted_closes_itself() {
-        compose.onNodeWithContentDescription("Edit order", substring = true).performClick()
+        compose.onNodeWithContentDescription("Edit order", substring = true).performScrollTo().performClick()
         compose.onNodeWithText("Edit order").assertIsDisplayed()
 
         runBlocking { repo.deleteOrder(orderId) }

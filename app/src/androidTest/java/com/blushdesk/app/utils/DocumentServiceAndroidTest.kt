@@ -7,6 +7,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.blushdesk.app.TestData
 import com.blushdesk.app.data.local.database.AppDatabase
+import com.blushdesk.app.data.repository.OfflineInventoryRepository
 import com.blushdesk.app.data.repository.OfflineShowroomRepository
 import com.blushdesk.app.domain.model.PaymentStatus
 import com.blushdesk.app.domain.model.UserFacingException
@@ -39,7 +40,9 @@ class DocumentServiceAndroidTest {
         clearGeneratedFiles() // start from an empty cache, whatever earlier runs or manual use left behind
         db = TestData.inMemoryDatabase(context)
         repository = OfflineShowroomRepository(db, PhotoStorage(context))
-        service = AndroidDocumentService(context, repository, ExcelExporter(), PdfReceiptGenerator(), DownloadsSaver(context))
+        service = AndroidDocumentService(
+            context, repository, OfflineInventoryRepository(db, PhotoStorage(context)), ExcelExporter(), PdfReceiptGenerator(), DownloadsSaver(context),
+        )
     }
 
     private fun clearGeneratedFiles() {

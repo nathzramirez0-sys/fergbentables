@@ -12,6 +12,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Facebook
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -31,12 +32,16 @@ import com.blushdesk.app.ui.components.Avatar
 import com.blushdesk.app.ui.theme.Dimens
 import com.blushdesk.app.utils.Formats
 
-/** The selected buyer's profile photo, name, contact details and date added, with Edit and Delete. */
+/**
+ * The selected buyer's profile photo, name, contact details and date added, with Edit, Export
+ * (this buyer's own workbook) and Delete.
+ */
 @Composable
 fun BuyerDetailHeader(
     buyer: Buyer,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    onExport: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -74,6 +79,10 @@ fun BuyerDetailHeader(
                 OutlinedButton(onClick = onEdit) {
                     Icon(Icons.Filled.Edit, contentDescription = null, modifier = Modifier.size(Dimens.iconMedium))
                     Text("  Edit")
+                }
+                OutlinedButton(onClick = onExport) {
+                    Icon(Icons.Filled.FileDownload, contentDescription = null, modifier = Modifier.size(Dimens.iconMedium))
+                    Text("  Export")
                 }
                 TextButton(onClick = onDelete) {
                     Icon(Icons.Filled.Delete, contentDescription = null, modifier = Modifier.size(Dimens.iconMedium), tint = MaterialTheme.colorScheme.error)

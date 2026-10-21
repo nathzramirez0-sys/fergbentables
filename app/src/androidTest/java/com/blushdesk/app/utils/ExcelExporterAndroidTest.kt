@@ -47,7 +47,7 @@ class ExcelExporterAndroidTest {
     fun reads_back_on_android_with_the_specified_sheets_and_values() {
         exportSample().inputStream().use { input ->
             XSSFWorkbook(input).use { workbook ->
-                assertEquals(listOf("Items", "Buyers", "Orders", "Operator", "Summary"), (0 until workbook.numberOfSheets).map { workbook.getSheetName(it) })
+                assertEquals(listOf("Items", "Buyers", "Orders", "Operator", "Summary", "Inventory", "Stock Movements"), (0 until workbook.numberOfSheets).map { workbook.getSheetName(it) })
 
                 val orders = workbook.getSheet("Orders")
                 assertEquals(4, orders.lastRowNum) // one row per product line: 1 + 2 + 1

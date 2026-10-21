@@ -2,6 +2,7 @@ package com.blushdesk.app.ui.showroom
 
 import com.blushdesk.app.data.local.database.BuyerListItem
 import com.blushdesk.app.data.local.database.OperatorProfile
+import com.blushdesk.app.data.local.database.Product
 import com.blushdesk.app.data.local.database.ShowroomSummary
 import com.blushdesk.app.domain.model.BuyerDetail
 import com.blushdesk.app.utils.ExportDocument
@@ -24,6 +25,8 @@ data class ShowroomUiState(
     val exporting: Boolean = false,
     /** Id of the order whose receipt is being generated, if any. */
     val receiptOrderId: Long? = null,
+    /** The inventory, for the order form's product picker. */
+    val products: List<Product> = emptyList(),
 ) {
     val isLoading: Boolean get() = !operatorLoaded || !buyersLoaded
 

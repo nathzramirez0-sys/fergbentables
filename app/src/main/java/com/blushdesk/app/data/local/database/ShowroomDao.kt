@@ -93,6 +93,16 @@ interface ShowroomDao {
     @Query("SELECT * FROM orders WHERE id = :orderId")
     suspend fun getOrderWithItems(orderId: Long): OrderWithItems?
 
+    /** Every order of one buyer with its items: what deleting the buyer has to return to stock. */
+    @Transaction
+    @Query("SELECT * FROM orders WHERE buyerId = :buyerId")
+    suspend fun getOrdersForBuyer(buyerId: Long): List<OrderWithItems>
+
+    /** One buyer with every order and item, for their profile export. */
+    @Transaction
+    @Query("SELECT * FROM buyers WHERE id = :buyerId")
+    suspend fun getBuyerWithOrders(buyerId: Long): BuyerWithOrders?
+
     /** Order history of one buyer, newest purchase first, each with its items. */
     @Transaction
     @Query("SELECT * FROM orders WHERE buyerId = :buyerId ORDER BY purchaseDateTime DESC, id DESC")

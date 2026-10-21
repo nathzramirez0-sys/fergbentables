@@ -7,14 +7,19 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 
 @Database(
-    entities = [OperatorProfile::class, Buyer::class, Order::class, OrderItem::class],
-    version = 4,
+    entities = [
+        OperatorProfile::class, Buyer::class, Order::class, OrderItem::class,
+        Product::class, StockMovement::class, InventoryNotification::class,
+    ],
+    version = 5,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun dao(): ShowroomDao
+
+    abstract fun inventoryDao(): InventoryDao
 
     companion object {
         /** Unchanged since version 1, so an upgraded app opens (and migrates) the same file. */
@@ -26,7 +31,7 @@ abstract class AppDatabase : RoomDatabase() {
          */
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context.applicationContext, AppDatabase::class.java, FILE_NAME)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build()
     }
 }

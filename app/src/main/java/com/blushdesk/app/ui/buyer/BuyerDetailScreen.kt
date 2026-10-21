@@ -43,6 +43,7 @@ import com.blushdesk.app.utils.Money
 class BuyerDetailActions(
     val onEditBuyer: () -> Unit,
     val onDeleteBuyer: () -> Unit,
+    val onExportBuyer: () -> Unit,
     val onAddOrder: () -> Unit,
     val onAddBuyer: () -> Unit,
     val onSelectOrder: (Long) -> Unit,
@@ -96,7 +97,7 @@ fun BuyerDetailScreen(
         verticalArrangement = Arrangement.spacedBy(Dimens.spaceL),
     ) {
         item(key = "header") {
-            BuyerDetailHeader(detail.buyer, onEdit = actions.onEditBuyer, onDelete = actions.onDeleteBuyer)
+            BuyerDetailHeader(detail.buyer, onEdit = actions.onEditBuyer, onDelete = actions.onDeleteBuyer, onExport = actions.onExportBuyer)
         }
         item(key = "totals") { TotalsRow(detail.totals, compact) }
         item(key = "history-header") {

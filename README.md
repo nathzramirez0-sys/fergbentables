@@ -2,8 +2,10 @@
 
 An offline Android tablet app for running a showroom counter. It keeps a list of buyers, records
 what they bought, follows each order from processing to delivery, prints a PDF receipt for paid
-orders and exports everything to Excel. Built with Kotlin, Jetpack Compose (Material 3) and Room,
-with a custom pink design system.
+orders, keeps the showroom's inventory and exports everything to Excel. The inventory covers stock
+in, sales taken off the stock automatically, adjustments, a full movement history, stock reminders
+and low-stock alerts. Built with Kotlin, Jetpack Compose (Material 3), Room and WorkManager, with a
+custom pink design system.
 
 The app started as BlushDesk. Only its package name, `com.blushdesk.app`, keeps that working
 name. Changing the application id would make Android treat it as a different app,
@@ -23,7 +25,8 @@ Facebook name (at least one, or both), an optional email and a profile photo. Th
 automatically. Search matches the name, number, Facebook name or email. Each row in the buyer list
 shows the photo, name, contact number (or "Facebook: name"), number of orders, and the
 fulfillment and payment status of the latest order. Deleting a buyer deletes their orders too,
-after a confirmation.
+after a confirmation. The confirmation also offers to put back the stock those orders took from
+the inventory, which is ticked by default.
 
 **Orders.** An order holds one or more products, up to 30. Each line has a product name, unit
 price and quantity. The line total (unit price × quantity) and the order total (the sum of the
@@ -32,6 +35,10 @@ date and time (pickers), the payment mode (Cash or Online payment) and the payme
 (Unpaid, Pending or Paid). Money is a `BigDecimal` with two decimals, stored as whole centavos,
 so totals never pick up rounding errors. "Online payment" only records how the buyer paid. The
 app never makes a transaction.
+
+A line can come from the inventory ("Choose from inventory") or be typed in as a custom item. A
+picked line takes the product's name and price, and its quantity is capped at the stock on hand.
+A custom item never touches the stock. See [Inventory System](#inventory-system) below.
 
 **Order history and lifecycle.** The buyer's orders are listed newest first; a multi-product
 order reads "Velvet Sofa + 2 more". The selected order expands to show every product line, its
@@ -50,7 +57,84 @@ otherwise, and the generator itself refuses unpaid orders. The A4 receipt has:
 The PDF is written to the app's private cache, copied to `Download/FergBentables/`, and can be opened
 (to print) or shared from the app.
 
-**Excel export.** "Export to Excel" in the top bar opens a dialog that lists what the workbook
+### Inventory System
+
+The **Inventory System** button in the top bar (where "Export to Excel" used to be) opens the
+inventory. It has four tabs:
+
+- **Overview.** Counts of products and units in stock, plus the stock value. Then how many
+  products are in stock, low, out of stock or unavailable, and the units sold and restocked. Below
+  those: the products that need restocking and the latest stock movements.
+- **Products.** Search by name, SKU or category, with filters (In stock, Low stock, Out of stock,
+  Unavailable, Archived) and sorting. A product's profile shows:
+  - its stock, minimum, price and stock value
+  - its availability and its stock reminder
+  - every movement and every order that sold it
+
+  From the profile the operator can do **Stock in**, **Adjust stock**, **Edit**, **Export**,
+  **Archive** and **Delete**:
+  - Stock in records a delivery: the quantity, date, supplier, reference and notes.
+  - Adjust stock takes a reason: count correction, damaged, lost, found, customer return or other.
+    It shows the stock after the change and never lets it go below zero.
+- **Stock movements.** Every change to every quantity, filterable by type (stock in, sales,
+  returns, adjustments). Each one shows the previous quantity, the change, the new quantity, the
+  order or reason, and who made it.
+- **Notifications.** The notification history, then each product's stock reminder setting.
+
+A product has:
+- a name
+- an optional SKU, unique and case-insensitive
+- a category and a description
+- a selling price and an optional cost price
+- a unit, `pc` by default
+- a minimum stock
+- a photo
+- an availability: Available, Unavailable or Discontinued
+
+Its stock status is worked out on every read and never stored. In order of precedence it is
+Archived, Discontinued, Unavailable, Out of stock (0), Low stock (at or below the minimum), or In
+stock. Only an Available product that is not archived can go on a new order.
+
+Editing a product never changes its quantity. Stock only moves through Stock in, Adjust stock and
+orders, so every change leaves a record. A product that has been sold can be archived but not
+deleted, so old orders keep their link to it.
+
+**Stock and orders.** Saving an order takes its inventory lines off the stock, in the same
+database transaction as the order itself.
+- Editing an order moves only the difference. Adding 2 more takes 2, and removing a line puts its
+  stock back.
+- Saving the same order again changes nothing, so stock is never taken twice.
+- If any line asks for more than the stock on hand, the whole order is refused ("Insufficient
+  stock. Only 3 pc of Velvet Sofa are available.") and nothing is saved.
+- Deleting an order or a buyer asks whether to return the stock.
+
+These changes are credited to "System" in the movement history. Deliveries and adjustments are
+credited to the operator by name.
+
+**Stock reminders and low-stock alerts** are two separate notifications:
+
+- A **stock reminder** ("May stock pa ng Velvet Sofa: 3 pc left.") repeats every 3 days, every
+  week or every month, set per product, or never. It pauses while the product is out of stock,
+  archived or discontinued.
+- A **low-stock alert** comes when a sale or adjustment takes a product to or below its minimum.
+  It is sent once per dip and re-arms when the stock goes back above the minimum. Running out
+  always sends one more ("Out of stock: Velvet Sofa").
+
+Both appear in the app's notification history, and the unread count shows on the Inventory System
+button. When the operator allows it, they also come as phone notifications that open that history.
+
+A WorkManager job checks for due reminders every 6 hours and whenever the app opens. Each reminder
+is keyed by product and due time, and a unique index refuses a second copy. A job that runs twice
+therefore cannot send the same reminder twice. A reminder missed while the tablet was off is sent
+once, not once for every period missed.
+
+| Inventory overview | Product profile |
+|---|---|
+| ![Inventory overview](docs/screenshots/inventory-overview.png) | ![Product profile](docs/screenshots/product-profile.png) |
+
+### Excel export
+
+The **Export** tile on the dashboard (left pane) opens a dialog. It lists what the full workbook
 contains and offers two ways to get it:
 
 - **Download to device** saves the `.xlsx` in `Download/FergBentables/`, where the Files app (or a
@@ -66,7 +150,9 @@ Both hand over the same formatted workbook:
 | Buyers   | Buyer ID, Full Name, Contact Number, Facebook Name, Email, Date Added, Number of Orders, Payment Status |
 | Orders   | One row per product line: Order ID, Buyer ID, Buyer Name, Product, Unit Price, Quantity, Total Amount (that line), Purchase Date, Purchase Time, Payment Mode, Payment Status, Fulfillment Status, plus Order Total |
 | Operator | Operator Name, Store Name, Email, Phone Number |
-| Summary  | Total Buyers, Total Orders, Paid / Unpaid / Pending Orders, Processing / Preparing / Delivered Orders, Total Recorded Sales |
+| Summary  | Total Buyers, Total Orders, Paid / Unpaid / Pending Orders, Processing / Preparing / Delivered Orders, Total Recorded Sales, then the inventory: products, units in stock, in stock / low / out of stock / unavailable products, stock value |
+| Inventory | Product ID, SKU, Product Name, Category, Unit, Selling Price, Cost Price, Current Stock, Minimum Stock, Stock Status, Availability, Stock Value, Stock Reminder, Last Updated |
+| Stock Movements | Date, Time, Product ID, SKU, Product, Movement, Previous Stock, Change, New Stock, Order, Reason / Notes, Supplier, Reference, Performed By |
 
 The Items sheet was added to read orders on a tablet. Its totals are Excel formulas, so they
 recalculate if someone edits a quantity or price. The app also stores each formula's result, so
@@ -77,6 +163,15 @@ printout shows who still owes: a buyer is Paid once every order is paid, Not Yet
 order is Unpaid or Pending, and "No orders" before their first order. Headers are styled and
 frozen, the Buyers and Orders tables have filters, money uses a peso currency format, dates and
 times are real Excel dates, and status cells are color coded.
+
+Three smaller workbooks come from the profiles. Each is named after what it holds and the date, and
+offers the same Download and Share choices:
+
+| Export from | File name | Sheets |
+|---|---|---|
+| A buyer's profile (Export) | `Ana_Reyes_Profile_2026-10-20.xlsx` | Profile, Items, Orders |
+| A product's profile (Export) | `Velvet_Sofa_Inventory_2026-10-20.xlsx` | Product, Stock Movements, Sales |
+| The Inventory System (Export inventory) | `Inventory_Report_2026-10-20.xlsx` | Inventory, Stock Movements, Summary (adds archived products, stock value at cost, units sold and units restocked) |
 
 The file is a plain ZIP: every part carries its size and checksum in its own header, the way Excel
 saves files. Apache POI streams the parts instead, leaving those fields empty. Desktop Excel
@@ -117,6 +212,7 @@ same in airplane mode.
 | Excel | Apache POI 5.5 (`poi-ooxml`) |
 | PDF | Android's built-in `PdfDocument` canvas |
 | Images | Coil 3, `ExifInterface` |
+| Background work | WorkManager 2.12 (stock reminders) |
 | Build | AGP 9.4, Gradle 9.8, compileSdk 37, targetSdk 37, minSdk 29 (Android 10) |
 
 ## Project structure
@@ -124,31 +220,38 @@ same in airplane mode.
 ```
 app/src/main/java/com/blushdesk/app/
 ├── data/
-│   ├── local/database/   AppDatabase, ShowroomDao, Entities (OperatorProfile, Buyer, Order),
+│   ├── local/database/   AppDatabase, ShowroomDao, InventoryDao, Entities (OperatorProfile, Buyer,
+│   │                     Order, OrderItem, Product, StockMovement, InventoryNotification),
 │   │                     Relations (BuyerWithOrders, ...), Converters, Migrations
-│   └── repository/       OfflineShowroomRepository (Room implementation)
+│   └── repository/       OfflineShowroomRepository, OfflineInventoryRepository (Room),
+│                         InventoryLedger (the only code that changes a quantity)
 ├── domain/
-│   ├── model/            Enums (PaymentMode, PaymentStatus, FulfillmentStatus), BuyerDetail,
-│   │                     ExportSnapshot, UserFacingException
-│   └── repository/       ShowroomRepository (interface)
+│   ├── model/            Enums (PaymentMode, PaymentStatus, FulfillmentStatus), Inventory (Availability,
+│   │                     StockStatus, MovementType, AdjustmentReason, ReminderInterval), BuyerDetail,
+│   │                     ExportSnapshot (+ BuyerReport, ProductReport, InventoryReport), UserFacingException
+│   └── repository/       ShowroomRepository, InventoryRepository (interfaces)
+├── notifications/        InventoryNotifier (phone notifications), ReminderWorker (WorkManager job)
 ├── ui/
+│   ├── AppRoot.kt        switches between the showroom and the inventory, keeping each one's state
 │   ├── theme/            ShowroomPinkTheme: Color, Type, Shape, Dimens, Theme
 │   ├── components/       OperatorProfileCard, BuyerList, BuyerListItem, SearchBar, OrderCard,
 │   │                     OrderStatusBadge (+ FulfillmentProgress), PaymentStatusBadge, StatCard,
 │   │                     EmptyState, LoadingIndicator, ShowroomSnackbar, FormDialog, ...
 │   ├── showroom/         ShowroomTabletScreen, ShowroomViewModel, ShowroomUiState, MasterPane
+│   ├── inventory/        InventoryScreen, InventoryViewModel, InventoryUiState, InventoryOverview,
+│   │                     InventoryTabs, ProductProfile, ProductFormDialog, StockDialogs, InventoryRows
 │   ├── buyer/            AddBuyerDialog, EditBuyerDialog, BuyerDetailScreen, BuyerDetailHeader
 │   ├── order/            AddOrderDialog, EditOrderDialog, OrderDetailCard, OrderHistory, ReceiptReadyDialog
 │   ├── operator/         EditOperatorProfileDialog
-│   └── export/           ExportDialog
+│   └── export/           ExportDialog, ExportChoiceDialog
 ├── utils/                PdfReceiptGenerator, ExcelExporter, DocumentService, Money, Validation,
 │                         Formats, PhotoStorage, DownloadsSaver, AppFiles, Sharing
 ├── di/                   AppContainer
 └── MainActivity.kt, FergBentablesApp.kt
 ```
 
-Data flows one way. Room emits `Flow`s, `ShowroomViewModel` combines them into one immutable
-`ShowroomUiState`, and the screen renders that state and calls view model functions.
+Data flows one way. Room emits `Flow`s, `ShowroomViewModel` and `InventoryViewModel` each combine
+them into one immutable UI state, and the screens render that state and call view model functions.
 Composables never touch the database. One-off results (success, error, "receipt ready", "share
 this workbook") arrive as events. The view model depends only on interfaces, so its unit tests
 run on the JVM with fakes.
@@ -163,6 +266,15 @@ operator_profile (one active row)   buyers 1 ──── * orders 1 ───�
                                        dateAdded,              fulfillmentStatus,             lineTotal
                                        profileImageUri,        createdAt, updatedAt
                                        createdAt, updatedAt
+
+products 1 ──── * stock_movements            products 1 ──── * inventory_notifications
+  id, sku (unique), name, category,            id, productId (FK, CASCADE),     id, productId (FK, CASCADE),
+  description, sellingPrice, costPrice,        type, previousQuantity, change,  kind, title, message,
+  quantity, minimumStock, unit,                newQuantity, orderId, reason,    dedupKey (unique),
+  availability, archived, imageUri,            supplier, reference,             createdAt, readAt, postedAt
+  reminderInterval, reminderLastSentAt,        performedBy, occurredAt,
+  reminderNextAt, lowStockAlerted,             createdAt
+  createdAt, updatedAt                       order_items.productId → products (FK, RESTRICT; NULL for a custom item)
 ```
 
 - Money is `BigDecimal` in code and centavos (INTEGER) in SQLite, so SQL `SUM()` is exact. A third
@@ -178,18 +290,31 @@ operator_profile (one active row)   buyers 1 ──── * orders 1 ───�
   - order totals
   - orders by payment status and by fulfillment status
   - the export data
-- The schema is exported to `app/schemas/`. Three hand-written migrations are tested with Room's
+- Every quantity change goes through `InventoryLedger`, which writes the new quantity and its
+  `stock_movements` row together inside the caller's transaction. A refusal (not enough stock)
+  throws, and the whole order or delivery around it rolls back.
+- The schema is exported to `app/schemas/`. Four hand-written migrations are tested with Room's
   `MigrationTestHelper`:
   - version 1 → 2 moved to this specification's field names
   - version 2 → 3 moved products into `order_items`; each old order becomes an order with one line
   - version 3 → 4 added `facebookName`; existing buyers keep their number and get an empty one
+  - version 4 → 5 added the three inventory tables and `order_items.productId`; existing order lines
+    are kept as custom items (no product link), so no stock is taken for past sales
 - There is deliberately no destructive fallback: this is the shop's only copy of its records.
 
 ## Permissions, files and privacy
 
-The app requests **no runtime permissions** and declares none of its own. The only entry in the
-built APK is `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`, which androidx.core adds. It is
-signature-level and private to the app, and users never see it.
+The only runtime permission is **notifications** (`POST_NOTIFICATIONS`, Android 13+). It is asked
+the first time a stock reminder is turned on, and the Notifications tab offers it again while it
+is off. Refusing it loses nothing: reminders and alerts still appear in the app's notification
+history.
+
+The other entries in the built APK are install-time permissions that users are never asked about:
+- WorkManager adds `WAKE_LOCK`, `RECEIVE_BOOT_COMPLETED` (to reschedule the reminder job after a
+  restart), `ACCESS_NETWORK_STATE` and `FOREGROUND_SERVICE`. The reminder job uses neither the
+  network nor a foreground service.
+- androidx.core adds `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`, which is signature-level and
+  private to the app.
 
 - **Gallery photos** come through the Photo Picker, so the user hands over one image.
 - **Camera photos** are taken by the device's camera app, which writes to a FileProvider URI.
@@ -264,8 +389,8 @@ rules, install the release APK and do an Excel export and a receipt before shipp
 ## Tests
 
 ```bash
-./gradlew :app:testDebugUnitTest            # 77 JVM tests, no device needed
-./gradlew :app:connectedDebugAndroidTest    # 84 tests on a running emulator or device
+./gradlew :app:testDebugUnitTest            # 104 JVM tests, no device needed
+./gradlew :app:connectedDebugAndroidTest    # 118 tests on a running emulator or device
 ```
 
 - **Unit tests:**
@@ -274,10 +399,22 @@ rules, install the release APK and do an Excel export and a receipt before shipp
     results, the plain ZIP layout; POI on the JVM)
   - the theme's color initialization
   - the view model against fakes: selection (including after the app is closed in the background), order expansion, totals, lifecycle, deletes, friendly errors, exports
+  - the inventory rules: stock status and its precedence, reminder dates (month ends, time zones), the product and stock-form validation, the inventory filters and searches, and the buyer, product and inventory workbooks
 - **Instrumented tests:**
   - every DAO query on real SQLite (cascade delete, foreign keys, latest-order status, totals, status lists, export summary, search with `%` and `_`)
-  - the v1 → v2 → v3 → v4 migrations
+  - the v1 → v2 → v3 → v4 → v5 migrations
   - the repository rules (recomputed totals, timestamps, validation, photo cleanup)
+  - the inventory on real SQLite:
+    - a sale takes stock and records a movement
+    - overselling is refused with nothing saved
+    - saving an order twice takes stock once, and editing moves only the difference
+    - deleting an order or buyer returns stock when asked
+    - unsellable products are refused
+    - stock in and adjustments
+    - archive versus delete
+    - low-stock alerts once per dip, and again on running out
+    - reminders due once per slot, never twice for the same slot
+  - the notifier: a due reminder becomes one phone notification, low-stock alerts use their own channel, and the WorkManager job is scheduled and runs
   - Apache POI on Android's runtime, formula results included
   - PDF generation rendered back to pixels
   - photo import, Downloads saving (receipts and the workbook, byte for byte), FileProvider rules
@@ -287,6 +424,7 @@ rules, install the release APK and do an Excel export and a receipt before shipp
     - the buyer form: a contact number or a Facebook name
     - the export dialog: Download to device and Share as separate choices, both held back while the workbook is made or when there is nothing to export, and the "saved" dialog naming the file and folder
     - the whole screen keeping an open form and what was typed when it is recreated
+    - the inventory: the Inventory System button and the dashboard's Export tile, a duplicate SKU caught while typing, the order form's inventory picker stopping at the stock on hand, an adjustment that cannot go below zero, and adding a product and stocking it in
 
 The PDF test writes PNG renders of each receipt to the app's `files/test-artifacts/` so a person
 can look at the output.
@@ -302,10 +440,24 @@ can look at the output.
 
 ## Known limitations
 
+- **Reminders are not to the minute.** Android runs the reminder job about every 6 hours, and
+  later when the tablet is idle (Doze), so a reminder can arrive several hours after it is due. It
+  is also checked whenever the app opens. Low-stock alerts are not affected: they are raised the
+  moment the stock changes.
+- **One operator, no accounts.** The app has no login or roles, by design (see
+  [Offline by design](#offline-by-design)). "Performed by" in the movement history records the
+  operator's name from the profile, and "System" for changes made by orders.
+- **One tablet.** Stock lives on this tablet only. Two tablets would each keep their own count.
 - **The release build is checked by hand.** The automated tests run against the debug build. The
   shrunk, signed release build was checked on the emulator: profile, buyers (including one reached
   only on Facebook), a multi-product order, receipt, sharing, Excel export (pulled off the device
   and checked on a PC, formula results included) and photo import.
+
+  For 1.2.0 it was installed over 1.1.4 on a phone emulator, and these were checked:
+  - the existing buyer and order came through the migration
+  - the reminder job ran under R8
+  - adding a product and turning on a reminder, which asked for the notification permission
+  - selling from stock, which raised a low-stock phone notification
 - **Excel for Android itself is untested here.** The emulator has no signed-in Play Store, so the
   "password-protected" fix was checked against the file format (every ZIP header filled in, as
   Excel writes them), not by opening the file in Excel for Android.
