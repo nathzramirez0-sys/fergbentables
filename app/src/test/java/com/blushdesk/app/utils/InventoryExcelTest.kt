@@ -116,6 +116,9 @@ class InventoryExcelTest {
             assertEquals("Out of stock", sheet.text(3, 9))
             assertEquals("Unavailable", sheet.text(1, 9))
             assertEquals(14450.0, sheet.number(2, 11), 0.001) // 850 x 17
+            // "20 Oct 2026 10:39 PM" is 20 characters; a narrower column prints as ##### in Excel.
+            val lastUpdated = ExcelExporter.INVENTORY_COLUMNS.indexOf("Last Updated")
+            assertTrue(sheet.getColumnWidth(lastUpdated) / 256 >= 21)
 
             val history = wb.getSheet(ExcelExporter.SHEET_MOVEMENTS)
             assertEquals(ExcelExporter.MOVEMENT_COLUMNS, history.headers(ExcelExporter.MOVEMENT_COLUMNS.size))
@@ -124,6 +127,13 @@ class InventoryExcelTest {
             assertEquals(17.0, history.number(2, 8), 0.0)
             assertEquals("BD-000012", history.text(2, 9))
             assertEquals("System", history.text(2, 13))
+
+            // Every bold header fits on one line: "Previous Stock" used to wrap and be cut off.
+            for ((table, columns) in listOf(sheet to ExcelExporter.INVENTORY_COLUMNS, history to ExcelExporter.MOVEMENT_COLUMNS)) {
+                columns.forEachIndexed { col, header ->
+                    assertTrue("$header is too narrow", table.getColumnWidth(col) / 256 >= header.length + 1)
+                }
+            }
 
             val summary = wb.getSheet(ExcelExporter.SHEET_SUMMARY)
             assertEquals(3.0, summary.valueOf("Total Products").numericCellValue, 0.0)
@@ -164,6 +174,9 @@ class InventoryExcelTest {
             assertEquals(2, wb.getSheet("Stock Movements").lastRowNum)
             val sales = wb.getSheet("Sales")
             assertEquals(ExcelExporter.SALE_COLUMNS, sales.headers(ExcelExporter.SALE_COLUMNS.size))
+            ExcelExporter.SALE_COLUMNS.forEachIndexed { col, header ->
+                assertTrue("$header is too narrow", sales.getColumnWidth(col) / 256 >= header.length + 1)
+            }
             assertEquals("BD-000012", sales.text(1, 0))
             assertEquals(3.0, sales.number(1, 4), 0.0)
         }

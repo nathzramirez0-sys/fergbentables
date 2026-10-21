@@ -457,7 +457,7 @@ class ExcelExporter(private val zone: ZoneId = ZoneId.systemDefault()) {
 
     /** Every product, archived ones included (their status says so), one row each. */
     private fun writeInventory(sheet: XSSFSheet, styles: Styles, products: List<Product>) {
-        writeHeader(sheet, styles, INVENTORY_COLUMNS, widths = listOf(11, 14, 30, 18, 8, 15, 15, 14, 14, 15, 15, 16, 16, 18))
+        writeHeader(sheet, styles, INVENTORY_COLUMNS, widths = listOf(11, 14, 30, 18, 8, 15, 15, 14, 14, 15, 15, 16, 16, 22))
         products.forEachIndexed { index, p ->
             val zebra = index % 2 == 1
             val status = p.stockStatus
@@ -487,7 +487,7 @@ class ExcelExporter(private val zone: ZoneId = ZoneId.systemDefault()) {
 
     /** The audit trail, oldest first: every change to every quantity, with who and why. */
     private fun writeMovements(sheet: XSSFSheet, styles: Styles, movements: List<MovementRow>) {
-        writeHeader(sheet, styles, MOVEMENT_COLUMNS, widths = listOf(14, 11, 11, 14, 28, 20, 12, 10, 12, 13, 34, 20, 16, 18))
+        writeHeader(sheet, styles, MOVEMENT_COLUMNS, widths = listOf(14, 11, 11, 14, 28, 20, 15, 10, 12, 13, 34, 20, 16, 18))
         movements.forEachIndexed { index, row ->
             val m = row.movement
             val zebra = index % 2 == 1
@@ -518,7 +518,7 @@ class ExcelExporter(private val zone: ZoneId = ZoneId.systemDefault()) {
 
     /** Every order line that sold one product, oldest first. */
     private fun writeSales(sheet: XSSFSheet, styles: Styles, sales: List<ProductSale>) {
-        writeHeader(sheet, styles, SALE_COLUMNS, widths = listOf(13, 26, 14, 11, 10, 15, 15, 16, 18))
+        writeHeader(sheet, styles, SALE_COLUMNS, widths = listOf(13, 26, 14, 11, 10, 15, 15, 16, 20))
         sales.forEachIndexed { index, sale ->
             val zebra = index % 2 == 1
             sheet.createRow(index + 1).apply {
