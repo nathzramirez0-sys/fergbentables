@@ -10,12 +10,15 @@ import com.blushdesk.app.data.local.database.OperatorProfile
 import com.blushdesk.app.data.local.database.Order
 import com.blushdesk.app.data.local.database.OrderItem
 import com.blushdesk.app.data.local.database.OrderWithItems
+import com.blushdesk.app.data.local.database.Payment
 import com.blushdesk.app.data.local.database.ShowroomDao
 import com.blushdesk.app.domain.model.ExportSnapshot
 import com.blushdesk.app.domain.model.FulfillmentStatus
 import com.blushdesk.app.domain.model.PaymentMode
 import com.blushdesk.app.domain.model.PaymentStatus
 import com.blushdesk.app.utils.Money
+import java.math.BigDecimal
+import java.math.RoundingMode
 import java.time.Instant
 
 /** Shared fixtures for the instrumented tests. */
@@ -78,6 +81,9 @@ object TestData {
     /**
      * Inserts an order and its lines straight through the DAO (bypassing the repository), with the
      * total set the way the repository would set it. One line by default.
+     *
+     * The payments match [pay], since the totals are worked out from payments: a paid order gets
+     * one payment of its total, a partly paid one a payment of half of it, an unpaid one none.
      */
     suspend fun ShowroomDao.addOrder(
         buyerId: Long,
@@ -93,6 +99,12 @@ object TestData {
         val total = items.fold(Money.ZERO) { sum, line -> sum + line.lineTotal }
         val id = insertOrder(order(buyerId, pay, stage, mode, at = at).copy(totalAmount = total))
         insertItems(items.mapIndexed { i, line -> line.copy(orderId = id, position = i) })
+        val paid = when (pay) {
+            PaymentStatus.PAID -> total
+            PaymentStatus.PENDING -> total.divide(BigDecimal(2), 2, RoundingMode.DOWN)
+            PaymentStatus.UNPAID -> Money.ZERO
+        }
+        if (paid.signum() > 0) insertPayment(Payment(orderId = id, amount = paid, paidAt = Instant.parse(at), paymentMode = mode))
         return id
     }
 

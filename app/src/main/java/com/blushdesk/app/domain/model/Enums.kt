@@ -10,12 +10,16 @@ enum class PaymentMode(val label: String) {
 }
 
 /**
- * [UNPAID]: nothing received. [PENDING]: payment promised or awaiting confirmation.
- * [PAID]: settled. Only [PAID] orders may have an official receipt.
+ * Follows from the order's payments: [UNPAID] nothing received, [PENDING] part of the total
+ * received (shown as "Partly paid"), [PAID] the whole total received. Only [PAID] orders may have an
+ * official receipt; the others can have an order slip showing the balance.
+ *
+ * [PENDING] keeps its stored name from before payments were tracked, when it meant "promised"; the
+ * version 6 migration turned those orders into [UNPAID], since no amount had been recorded.
  */
 enum class PaymentStatus(val label: String) {
     UNPAID("Unpaid"),
-    PENDING("Pending"),
+    PENDING("Partly paid"),
     PAID("Paid");
 
     val isPaid: Boolean get() = this == PAID

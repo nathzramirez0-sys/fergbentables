@@ -35,12 +35,20 @@ data class OperatorProfile(
     val profileImageUri: String? = null,
     val createdAt: Instant = Instant.EPOCH,
     val updatedAt: Instant = Instant.EPOCH,
+    /**
+     * Starts every new order number ("BD" makes BD-000042). Added in schema version 6; each order
+     * keeps the prefix it was made with, so changing this never renumbers printed receipts.
+     */
+    @ColumnInfo(defaultValue = DEFAULT_ORDER_PREFIX) val orderPrefix: String = DEFAULT_ORDER_PREFIX,
 ) {
     /** False until the two fields every receipt needs are filled in. */
     val isSetUp: Boolean get() = fullName.isNotBlank() && storeName.isNotBlank()
 
     companion object {
         const val ACTIVE_ID = 1
+
+        /** From the app's first name, BlushDesk: the prefix every order had before it could be changed. */
+        const val DEFAULT_ORDER_PREFIX = "BD"
     }
 }
 
@@ -93,10 +101,48 @@ data class Order(
     val totalAmount: BigDecimal = Money.ZERO,
     val purchaseDateTime: Instant,
     val paymentMode: PaymentMode,
+    /**
+     * Kept in step with the order's [Payment]s by the repository (schema version 6): nothing paid is
+     * UNPAID, part of the total is PENDING (shown as "Partly paid"), all of it is PAID.
+     */
     val paymentStatus: PaymentStatus,
     val fulfillmentStatus: FulfillmentStatus = FulfillmentStatus.PROCESSING,
     val createdAt: Instant = purchaseDateTime,
     val updatedAt: Instant = purchaseDateTime,
+    /** Where to deliver it, if the showroom delivers (schema version 6). */
+    @ColumnInfo(defaultValue = "") val deliveryAddress: String = "",
+    /** The day it is due to be delivered, at the start of that day in the tablet's time zone. */
+    val deliveryDate: Instant? = null,
+    /** The prefix of [com.blushdesk.app.utils.Formats.orderNumber], fixed when the order is made. */
+    @ColumnInfo(defaultValue = OperatorProfile.DEFAULT_ORDER_PREFIX) val numberPrefix: String = OperatorProfile.DEFAULT_ORDER_PREFIX,
+)
+
+/**
+ * Money received for an order: a downpayment, an installment, or the rest of the balance
+ * (schema version 6). The order's balance is its total minus the sum of these, and its
+ * [Order.paymentStatus] follows from that. [paymentMode] records how the buyer paid; the app
+ * never moves money itself.
+ */
+@Entity(
+    tableName = "payments",
+    foreignKeys = [
+        ForeignKey(
+            entity = Order::class,
+            parentColumns = ["id"],
+            childColumns = ["orderId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("orderId")],
+)
+data class Payment(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val orderId: Long,
+    val amount: BigDecimal,
+    val paidAt: Instant,
+    val paymentMode: PaymentMode,
+    val note: String = "",
+    val createdAt: Instant = paidAt,
 )
 
 /**

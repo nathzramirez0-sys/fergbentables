@@ -200,7 +200,7 @@ class ExcelExporter(private val zone: ZoneId = ZoneId.systemDefault()) {
         var row = 1
         orders.forEach { (buyer, withItems) ->
             val order = withItems.order
-            val title = "${Formats.orderNumber(order.id)} · ${buyer.fullName} · ${Formats.date(order.purchaseDateTime, zone)}"
+            val title = "${Formats.orderNumber(order)} · ${buyer.fullName} · ${Formats.date(order.purchaseDateTime, zone)}"
             sheet.createRow(row).apply {
                 text(0, title, styles.orderTitle)
                 (1..3).forEach { createCell(it).cellStyle = styles.orderTitle }
@@ -265,8 +265,8 @@ class ExcelExporter(private val zone: ZoneId = ZoneId.systemDefault()) {
     }
 
     /**
-     * A buyer is [PAID] once every one of their orders is marked Paid, and [NOT_YET_PAID] while any
-     * order is still Unpaid or Pending. A buyer without orders owes nothing but has not paid
+     * A buyer is [PAID] once every one of their orders is paid, and [NOT_YET_PAID] while any
+     * order is still Unpaid or Partly paid. A buyer without orders owes nothing but has not paid
      * anything either, so they get [NO_ORDERS] rather than a misleading "Paid".
      */
     private fun buyerPaymentStatus(orders: List<OrderWithItems>): String = when {
@@ -280,10 +280,11 @@ class ExcelExporter(private val zone: ZoneId = ZoneId.systemDefault()) {
     /**
      * One row per product line, so an order with three products takes three rows sharing the same
      * Order ID. "Total Amount" is that line's unit price x quantity; "Order Total" repeats the
-     * whole order's total on each of its rows. Zebra striping alternates per order, not per row.
+     * whole order's total on each of its rows, as do "Amount Paid" and "Balance". Zebra striping
+     * alternates per order, not per row.
      */
     private fun writeOrders(sheet: XSSFSheet, styles: Styles, buyers: List<BuyerWithOrders>) {
-        writeHeader(sheet, styles, ORDER_COLUMNS, widths = listOf(10, 10, 24, 32, 15, 10, 16, 15, 14, 17, 16, 18, 16))
+        writeHeader(sheet, styles, ORDER_COLUMNS, widths = listOf(10, 10, 24, 32, 15, 10, 16, 15, 14, 17, 16, 18, 16, 16, 16))
         val orders = ordersOf(buyers)
 
         var rowIndex = 1
@@ -309,6 +310,8 @@ class ExcelExporter(private val zone: ZoneId = ZoneId.systemDefault()) {
                 text(10, order.paymentStatus.label, styles.badge(BrandPalette.tone(order.paymentStatus)))
                 text(11, order.fulfillmentStatus.label, styles.badge(BrandPalette.tone(order.fulfillmentStatus)))
                 number(12, Money.toExcelNumber(order.totalAmount), styles.body(Kind.MONEY_BOLD, zebra))
+                number(13, Money.toExcelNumber(withItems.paidAmount), styles.body(Kind.MONEY, zebra))
+                number(14, Money.toExcelNumber(withItems.balance), styles.body(Kind.MONEY_BOLD, zebra))
             } }
         }
         finishTable(sheet, ORDER_COLUMNS.size, rowIndex - 1)
@@ -522,7 +525,7 @@ class ExcelExporter(private val zone: ZoneId = ZoneId.systemDefault()) {
         sales.forEachIndexed { index, sale ->
             val zebra = index % 2 == 1
             sheet.createRow(index + 1).apply {
-                text(0, Formats.orderNumber(sale.orderId), styles.body(Kind.TEXT, zebra))
+                text(0, Formats.orderNumber(sale.orderId, sale.numberPrefix), styles.body(Kind.TEXT, zebra))
                 text(1, sale.buyerName, styles.body(Kind.TEXT, zebra))
                 createCell(2).apply {
                     setCellValue(sale.purchaseDateTime.atZone(zone).toLocalDate())
@@ -545,7 +548,7 @@ class ExcelExporter(private val zone: ZoneId = ZoneId.systemDefault()) {
         "Total Orders" to SummaryValue.Count(s.totalOrders),
         "Paid Orders" to SummaryValue.Count(s.paidOrders),
         "Unpaid Orders" to SummaryValue.Count(s.unpaidOrders),
-        "Pending Orders" to SummaryValue.Count(s.pendingOrders),
+        "Partly Paid Orders" to SummaryValue.Count(s.pendingOrders),
         "Processing Orders" to SummaryValue.Count(s.processingOrders),
         "Preparing Orders" to SummaryValue.Count(s.preparingOrders),
         "Delivered Orders" to SummaryValue.Count(s.deliveredOrders),
@@ -764,6 +767,8 @@ class ExcelExporter(private val zone: ZoneId = ZoneId.systemDefault()) {
             "Purchase Date", "Purchase Time", "Payment Mode", "Payment Status", "Fulfillment Status",
             // Not in the original specification: added with multi-product orders.
             "Order Total",
+            // Not in the original specification: added with payments (downpayments and installments).
+            "Amount Paid", "Balance",
         )
 
         val OPERATOR_COLUMNS = listOf("Operator Name", "Store Name", "Email", "Phone Number")

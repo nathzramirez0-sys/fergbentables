@@ -32,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.window.DialogProperties
 import com.blushdesk.app.ui.theme.Dimens
 
@@ -43,6 +44,9 @@ import com.blushdesk.app.ui.theme.Dimens
  * Once the form [hasUnsavedChanges], Back and Cancel ask before throwing the input away. Back is
  * the easy one to hit by accident: with a floating keyboard it closes the form instead of the
  * keyboard. An untouched form still closes straight away.
+ *
+ * A [footer] stays put under the scrolling fields, above the buttons: the order form keeps its
+ * total there, so it is in view whichever product is being edited.
  */
 @Composable
 fun FormDialog(
@@ -52,6 +56,8 @@ fun FormDialog(
     onDismiss: () -> Unit,
     confirmEnabled: Boolean = true,
     hasUnsavedChanges: Boolean = false,
+    maxWidth: Dp = Dimens.dialogMaxWidth,
+    footer: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     var askToDiscard by rememberSaveable { mutableStateOf(false) }
@@ -59,17 +65,20 @@ fun FormDialog(
 
     AlertDialog(
         onDismissRequest = close,
-        properties = DialogProperties(dismissOnClickOutside = false),
         shape = MaterialTheme.shapes.large,
         containerColor = MaterialTheme.colorScheme.surface,
-        modifier = Modifier.widthIn(max = Dimens.dialogMaxWidth).fillMaxWidth(0.92f),
+        modifier = Modifier.widthIn(max = maxWidth).fillMaxWidth(0.92f),
+        properties = DialogProperties(dismissOnClickOutside = false, usePlatformDefaultWidth = maxWidth <= Dimens.dialogMaxWidth),
         title = { Text(title, color = MaterialTheme.colorScheme.secondary) },
         text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(Dimens.spaceM),
-                content = content,
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(Dimens.spaceM)) {
+                Column(
+                    modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(Dimens.spaceM),
+                    content = content,
+                )
+                footer?.invoke()
+            }
         },
         confirmButton = { Button(onClick = onConfirm, enabled = confirmEnabled) { Text(confirmLabel) } },
         dismissButton = { TextButton(onClick = close) { Text("Cancel") } },

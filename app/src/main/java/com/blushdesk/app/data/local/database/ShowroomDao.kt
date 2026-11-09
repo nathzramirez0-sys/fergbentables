@@ -19,6 +19,11 @@ import java.time.Instant
 @Dao
 interface ShowroomDao {
 
+    companion object {
+        /** SQL for what has been paid on the order aliased `o`, in centavos. */
+        const val PAID_OF_O = "COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.orderId = o.id), 0)"
+    }
+
     // ---- Operator ---------------------------------------------------------------------------
 
     @Query("SELECT * FROM operator_profile WHERE id = ${OperatorProfile.ACTIVE_ID}")
@@ -60,6 +65,8 @@ interface ShowroomDao {
         """
         SELECT b.*,
                (SELECT COUNT(*) FROM orders o WHERE o.buyerId = b.id) AS orderCount,
+               (SELECT COUNT(*) FROM orders o WHERE o.buyerId = b.id AND o.fulfillmentStatus <> 'DELIVERED') AS openOrders,
+               (SELECT COALESCE(SUM(MAX(o.totalAmount - $PAID_OF_O, 0)), 0) FROM orders o WHERE o.buyerId = b.id) AS balance,
                (SELECT o.fulfillmentStatus FROM orders o WHERE o.buyerId = b.id
                     ORDER BY o.purchaseDateTime DESC, o.id DESC LIMIT 1) AS latestFulfillmentStatus,
                (SELECT o.paymentStatus FROM orders o WHERE o.buyerId = b.id
@@ -123,6 +130,23 @@ interface ShowroomDao {
     @Query("UPDATE orders SET paymentStatus = :status, updatedAt = :updatedAt WHERE id = :orderId")
     suspend fun updatePaymentStatus(orderId: Long, status: PaymentStatus, updatedAt: Instant)
 
+    @Query("UPDATE orders SET deliveryAddress = :address, deliveryDate = :date, updatedAt = :updatedAt WHERE id = :orderId")
+    suspend fun updateDelivery(orderId: Long, address: String, date: Instant?, updatedAt: Instant)
+
+    // ---- Payments ---------------------------------------------------------------------------
+
+    @Insert
+    suspend fun insertPayment(payment: Payment): Long
+
+    @Query("SELECT * FROM payments WHERE id = :paymentId")
+    suspend fun getPayment(paymentId: Long): Payment?
+
+    @Query("DELETE FROM payments WHERE id = :paymentId")
+    suspend fun deletePayment(paymentId: Long)
+
+    @Query("SELECT * FROM payments WHERE orderId = :orderId ORDER BY paidAt ASC, id ASC")
+    suspend fun getPaymentsForOrder(orderId: Long): List<Payment>
+
     // ---- Orders by status -------------------------------------------------------------------
 
     /** For example every UNPAID order, oldest first: the collection list. */
@@ -133,17 +157,30 @@ interface ShowroomDao {
     @Query("SELECT * FROM orders WHERE fulfillmentStatus = :status ORDER BY purchaseDateTime ASC, id ASC")
     fun observeOrdersByFulfillmentStatus(status: FulfillmentStatus): Flow<List<Order>>
 
+    /** Every order not delivered yet, soonest first: by delivery date when it has one, else by purchase. */
+    @Query(
+        """
+        SELECT o.*, b.fullName AS buyerName,
+               (SELECT i.productName FROM order_items i WHERE i.orderId = o.id ORDER BY i.position ASC, i.id ASC LIMIT 1) AS firstProduct,
+               (SELECT COUNT(*) FROM order_items i WHERE i.orderId = o.id) AS itemCount
+        FROM orders AS o
+        JOIN buyers AS b ON b.id = o.buyerId
+        WHERE o.fulfillmentStatus <> 'DELIVERED'
+        ORDER BY COALESCE(o.deliveryDate, o.purchaseDateTime) ASC, o.id ASC
+        """,
+    )
+    fun observeOpenOrders(): Flow<List<OpenOrder>>
+
     // ---- Totals -----------------------------------------------------------------------------
 
     @Query(
         """
         SELECT COUNT(*) AS orderCount,
                COALESCE(SUM(CASE WHEN fulfillmentStatus <> 'DELIVERED' THEN 1 ELSE 0 END), 0) AS openOrders,
-               COALESCE(SUM(CASE WHEN paymentStatus = 'PAID' THEN totalAmount ELSE 0 END), 0) AS paidAmount,
-               COALESCE(SUM(CASE WHEN paymentStatus <> 'PAID' THEN totalAmount ELSE 0 END), 0) AS outstandingAmount,
+               COALESCE(SUM(MIN(paid, totalAmount)), 0) AS paidAmount,
+               COALESCE(SUM(MAX(totalAmount - paid, 0)), 0) AS outstandingAmount,
                COALESCE(SUM(totalAmount), 0) AS totalAmount
-        FROM orders
-        WHERE buyerId = :buyerId
+        FROM (SELECT o.fulfillmentStatus, o.totalAmount, $PAID_OF_O AS paid FROM orders o WHERE o.buyerId = :buyerId)
         """,
     )
     fun observeOrderTotals(buyerId: Long): Flow<OrderTotals>
@@ -153,8 +190,8 @@ interface ShowroomDao {
         SELECT (SELECT COUNT(*) FROM buyers) AS buyerCount,
                (SELECT COUNT(*) FROM orders) AS orderCount,
                (SELECT COUNT(*) FROM orders WHERE fulfillmentStatus <> 'DELIVERED') AS openOrders,
-               (SELECT COALESCE(SUM(totalAmount), 0) FROM orders WHERE paymentStatus = 'PAID') AS paidAmount,
-               (SELECT COALESCE(SUM(totalAmount), 0) FROM orders WHERE paymentStatus <> 'PAID') AS outstandingAmount
+               (SELECT COALESCE(SUM(MIN($PAID_OF_O, o.totalAmount)), 0) FROM orders o) AS paidAmount,
+               (SELECT COALESCE(SUM(MAX(o.totalAmount - $PAID_OF_O, 0)), 0) FROM orders o) AS outstandingAmount
         """,
     )
     fun observeShowroomSummary(): Flow<ShowroomSummary>

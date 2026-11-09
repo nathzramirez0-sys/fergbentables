@@ -2,6 +2,8 @@ package com.blushdesk.app.ui.order
 
 import android.text.format.DateFormat
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.layout.Arrangement
@@ -81,12 +83,14 @@ import com.blushdesk.app.domain.model.PaymentStatus
 import com.blushdesk.app.ui.components.FormDialog
 import com.blushdesk.app.ui.components.FormField
 import com.blushdesk.app.ui.components.InlineMessage
+import com.blushdesk.app.ui.components.PaymentStatusBadge
 import com.blushdesk.app.ui.components.SegmentedChoice
 import com.blushdesk.app.ui.components.ShowroomSearchBar
 import com.blushdesk.app.ui.theme.Dimens
 import com.blushdesk.app.ui.theme.ShowroomTheme
 import com.blushdesk.app.utils.Formats
 import com.blushdesk.app.utils.Money
+import com.blushdesk.app.utils.Payments
 import com.blushdesk.app.utils.Validation
 import java.math.BigDecimal
 import java.time.Instant
@@ -168,21 +172,25 @@ private class StockCheck(products: List<Product>, initial: OrderWithItems?, draf
     }
 }
 
-/** Records a new purchase for the selected buyer. */
+/** Records a new purchase for the selected buyer; [onSave] also gets the amount paid when it was made. */
 @Composable
 fun AddOrderDialog(
     buyerId: Long,
     buyerName: String,
     products: List<Product>,
-    onSave: (Order, List<OrderItem>) -> Unit,
+    onSave: (Order, List<OrderItem>, BigDecimal) -> Unit,
     onDismiss: () -> Unit,
 ) = OrderFormDialog(buyerId = buyerId, buyerName = buyerName, initial = null, products = products, onSave = onSave, onDismiss = onDismiss)
 
 /**
  * The order form shared by [AddOrderDialog] ([initial] = null) and [EditOrderDialog]: one or more
- * product lines, then date, time, payment and fulfillment. Every line total (unit price x
+ * product lines, then date, time, fulfillment and payment. Every line total (unit price x
  * quantity) and the order total are calculated on every keystroke and never typed in, so the
  * operator can read the total back to the customer before saving.
+ *
+ * On a tablet each product is one row, and the total, what is paid now and the balance stay pinned
+ * under the fields. A new order can take a downpayment ("Paid now"); the payment status follows
+ * from it. An edited order keeps its payments, which are recorded on the order card.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -191,7 +199,7 @@ internal fun OrderFormDialog(
     buyerName: String,
     initial: OrderWithItems?,
     products: List<Product>,
-    onSave: (Order, List<OrderItem>) -> Unit,
+    onSave: (Order, List<OrderItem>, BigDecimal) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val zone = remember { ZoneId.systemDefault() }
@@ -205,7 +213,7 @@ internal fun OrderFormDialog(
     val startMillis = rememberSaveable { (details?.purchaseDateTime ?: Instant.now()).toEpochMilli() }
     var purchasedAtMillis by rememberSaveable { mutableLongStateOf(startMillis) }
     var mode by rememberSaveable { mutableStateOf(details?.paymentMode ?: PaymentMode.CASH) }
-    var payment by rememberSaveable { mutableStateOf(details?.paymentStatus ?: PaymentStatus.UNPAID) }
+    var paidNow by rememberSaveable { mutableStateOf("") }
     var stage by rememberSaveable { mutableStateOf(details?.fulfillmentStatus ?: FulfillmentStatus.PROCESSING) }
     var attempted by rememberSaveable { mutableStateOf(false) }
     var showDatePicker by rememberSaveable { mutableStateOf(false) }
@@ -221,10 +229,18 @@ internal fun OrderFormDialog(
     val sellable = products.filter { it.isSellable }
     val allValid = drafts.all { it.isValid && stock.error(it) == null }
     val orderTotal = if (allValid) drafts.fold(Money.ZERO) { sum, d -> sum + d.lineTotal!! } else null
+    // Paid so far: what an edited order already has, or what is typed in for a new one.
+    val paidAmount = if (initial != null) initial.paidAmount else Money.parse(paidNow.ifBlank { "0" })
+    val paidProblem = when {
+        initial != null || paidNow.isBlank() -> null
+        paidAmount == null -> "Enter an amount like 5000 or 5000.50"
+        orderTotal != null && paidAmount > orderTotal -> "More than the order total of ${Money.format(orderTotal)}"
+        else -> null
+    }
     val hasChanges = drafts.toList() != startDrafts ||
         purchasedAtMillis != startMillis ||
         mode != (details?.paymentMode ?: PaymentMode.CASH) ||
-        payment != (details?.paymentStatus ?: PaymentStatus.UNPAID) ||
+        paidNow.isNotBlank() ||
         stage != (details?.fulfillmentStatus ?: FulfillmentStatus.PROCESSING)
 
     FormDialog(
@@ -232,44 +248,81 @@ internal fun OrderFormDialog(
         confirmLabel = if (initial == null) "Add order" else "Save",
         onDismiss = onDismiss,
         hasUnsavedChanges = hasChanges,
+        maxWidth = ORDER_DIALOG_MAX_WIDTH,
+        footer = {
+            OrderTotalsBar(
+                total = orderTotal,
+                lines = drafts.size,
+                units = drafts.sumOf { it.qty ?: 0 },
+                paid = paidAmount?.takeIf { paidProblem == null } ?: Money.ZERO,
+                paidLabel = if (initial == null) "Paid now" else "Paid so far",
+                problem = if (drafts.any { stock.error(it) != null }) {
+                    "Some products need more stock than is on hand"
+                } else {
+                    "Complete every product's price and quantity"
+                },
+            )
+        },
         onConfirm = {
             attempted = true
-            if (allValid && drafts.isNotEmpty()) {
+            if (allValid && drafts.isNotEmpty() && paidProblem == null) {
                 val purchased = Instant.ofEpochMilli(purchasedAtMillis)
                 val items = drafts.mapIndexed { index, draft -> draft.toItem(index) }
+                // The repository sets the payment status from the payments.
                 val order = details?.copy(
                     purchaseDateTime = purchased,
                     paymentMode = mode,
-                    paymentStatus = payment,
                     fulfillmentStatus = stage,
                 ) ?: Order(
                     buyerId = buyerId,
                     purchaseDateTime = purchased,
                     paymentMode = mode,
-                    paymentStatus = payment,
+                    paymentStatus = PaymentStatus.UNPAID,
                     fulfillmentStatus = stage,
                 )
-                onSave(order, items)
+                onSave(order, items, if (initial == null) paidAmount ?: Money.ZERO else Money.ZERO)
             }
         },
     ) {
         SectionLabel("Products")
-        drafts.forEachIndexed { index, draft ->
-            ItemEditor(
-                index = index,
-                draft = draft,
-                showErrors = attempted,
-                canRemove = drafts.size > 1,
-                isNew = index == newLine,
-                linked = stock.product(draft.productId),
-                available = draft.productId?.let(stock::available),
-                stockError = stock.error(draft),
-                canPick = sellable.isNotEmpty(),
-                onShown = { newLine = null },
-                onChange = { drafts[index] = it },
-                onRemove = { drafts.removeAt(index) },
-                onPick = { pickingFor = index },
-            )
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            // Wide enough for one row per product (a tablet); narrower windows keep a card per product.
+            val rows = maxWidth >= ITEM_ROW_MIN_WIDTH
+            Column(verticalArrangement = Arrangement.spacedBy(if (rows) Dimens.spaceS else Dimens.spaceM)) {
+                drafts.forEachIndexed { index, draft ->
+                    val line = ItemLine(
+                        index = index,
+                        draft = draft,
+                        showErrors = attempted,
+                        canRemove = drafts.size > 1,
+                        isNew = index == newLine,
+                        linked = stock.product(draft.productId),
+                        available = draft.productId?.let(stock::available),
+                        stockError = stock.error(draft),
+                        canPick = sellable.isNotEmpty(),
+                    )
+                    val onChange = { changed: ItemDraft -> drafts[index] = changed }
+                    if (rows) {
+                        ItemRow(line, onShown = { newLine = null }, onChange = onChange, onRemove = { drafts.removeAt(index) }, onPick = { pickingFor = index })
+                    } else {
+                        ItemEditor(
+                            index = index,
+                            draft = draft,
+                            showErrors = attempted,
+                            canRemove = line.canRemove,
+                            isNew = line.isNew,
+                            linked = line.linked,
+                            available = line.available,
+                            stockError = line.stockError,
+                            canPick = line.canPick,
+                            onShown = { newLine = null },
+                            onChange = onChange,
+                            onRemove = { drafts.removeAt(index) },
+                            onPick = { pickingFor = index },
+                        )
+                    }
+                }
+            }
         }
         OutlinedButton(
             onClick = {
@@ -282,16 +335,6 @@ internal fun OrderFormDialog(
             Text(if (drafts.size < Validation.MAX_ITEMS) "  Add another product" else "  ${Validation.MAX_ITEMS} products is the limit")
         }
 
-        TotalCard(
-            total = orderTotal,
-            lines = drafts.size,
-            units = drafts.sumOf { it.qty ?: 0 },
-            problem = if (drafts.any { stock.error(it) != null }) {
-                "Some products need more stock than is on hand"
-            } else {
-                "Complete every product's price and quantity"
-            },
-        )
 
         SectionLabel("Purchase date and time")
         Row(horizontalArrangement = Arrangement.spacedBy(Dimens.spaceM)) {
@@ -305,15 +348,36 @@ internal fun OrderFormDialog(
             }
         }
 
-        SectionLabel("Payment mode")
-        SegmentedChoice(PaymentMode.entries, mode, { it.label }, { mode = it })
-
-        SectionLabel("Payment status")
-        SegmentedChoice(PaymentStatus.entries, payment, { it.label }, { payment = it })
-        if (payment.isPaid) InlineMessage("Paid orders can have a PDF receipt generated.", isError = false)
-
         SectionLabel("Fulfillment status")
         SegmentedChoice(FulfillmentStatus.entries, stage, { it.label }, { stage = it })
+
+        SectionLabel("Payment")
+        if (initial == null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(Dimens.spaceM), verticalAlignment = Alignment.Top) {
+                FormField(
+                    value = paidNow,
+                    onValueChange = { if (PRICE_INPUT.matches(it)) paidNow = it },
+                    label = "Paid now (downpayment)",
+                    modifier = Modifier.weight(1f),
+                    prefix = Money.SYMBOL,
+                    keyboardType = KeyboardType.Decimal,
+                    error = paidProblem,
+                )
+                Column(Modifier.weight(1f).padding(top = Dimens.spaceS)) {
+                    SegmentedChoice(PaymentMode.entries, mode, { it.label }, { mode = it })
+                }
+            }
+            InlineMessage(
+                "Enter a downpayment, the full amount, or leave it empty. The payment status follows from it.",
+                isError = false,
+            )
+        } else {
+            SegmentedChoice(PaymentMode.entries, mode, { it.label }, { mode = it })
+            InlineMessage(
+                "Paid so far: ${Money.format(initial.paidAmount)}. Record payments from the order card.",
+                isError = false,
+            )
+        }
     }
 
     pickingFor?.let { line ->
@@ -642,20 +706,33 @@ private fun QuantityField(
     )
 }
 
-/** The live order total, or [problem] while it can't be worked out. Announced politely by screen readers as it changes. */
+/**
+ * Pinned under the form: the live order total (or [problem] while it can't be worked out), what is
+ * paid, and the balance with the payment status it leads to. Announced politely by screen readers
+ * as it changes.
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun TotalCard(total: BigDecimal?, lines: Int, units: Int, problem: String) {
+private fun OrderTotalsBar(total: BigDecimal?, lines: Int, units: Int, paid: BigDecimal, paidLabel: String, problem: String) {
     Surface(
         modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
         shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.primaryContainer,
     ) {
-        Row(
+        FlowRow(
             modifier = Modifier.padding(horizontal = Dimens.spaceL, vertical = Dimens.spaceM),
-            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Dimens.spaceXxl),
+            verticalArrangement = Arrangement.spacedBy(Dimens.spaceS),
+            itemVerticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(modifier = Modifier.weight(1f)) {
+            Column {
                 Text("ORDER TOTAL", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Text(
+                    text = total?.let { Money.format(it) } ?: "—",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
                 Text(
                     text = if (total != null) {
                         "${if (lines == 1) "1 product" else "$lines products"} · $units ${if (units == 1) "unit" else "units"}"
@@ -666,15 +743,133 @@ private fun TotalCard(total: BigDecimal?, lines: Int, units: Int, problem: Strin
                     color = ShowroomTheme.colors.mutedOnTint,
                 )
             }
-            Text(
-                text = total?.let { Money.format(it) } ?: "—",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-            )
+            if (total != null) {
+                Column {
+                    Text(paidLabel.uppercase(), style = MaterialTheme.typography.labelSmall, color = ShowroomTheme.colors.mutedOnTint)
+                    Text(Money.format(paid), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                }
+                Column {
+                    Text("BALANCE", style = MaterialTheme.typography.labelSmall, color = ShowroomTheme.colors.mutedOnTint)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Dimens.spaceS)) {
+                        Text(Money.format(Payments.balance(total, paid)), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        PaymentStatusBadge(Payments.status(total, paid))
+                    }
+                }
+            }
         }
     }
 }
+
+/** What a product line needs to draw itself, worked out once by the form. */
+private class ItemLine(
+    val index: Int,
+    val draft: ItemDraft,
+    val showErrors: Boolean,
+    val canRemove: Boolean,
+    val isNew: Boolean,
+    val linked: Product?,
+    val available: Int?,
+    val stockError: String?,
+    val canPick: Boolean,
+)
+
+/**
+ * One product as a single row (tablet): name with where it comes from, unit price, quantity
+ * stepper, line total and remove. A line just added scrolls into view and takes the cursor.
+ */
+@Composable
+private fun ItemRow(
+    line: ItemLine,
+    onShown: () -> Unit,
+    onChange: (ItemDraft) -> Unit,
+    onRemove: () -> Unit,
+    onPick: () -> Unit,
+) {
+    val draft = line.draft
+    val (productError, priceError, qtyError) = draft.errors
+    val bringIntoView = remember { BringIntoViewRequester() }
+    val nameFocus = remember { FocusRequester() }
+    if (line.isNew) {
+        LaunchedEffect(Unit) {
+            withFrameNanos { }
+            bringIntoView.bringIntoView()
+            nameFocus.requestFocus()
+            onShown()
+        }
+    }
+    val linkedLine = draft.productId != null
+    val source = when {
+        !linkedLine -> "Custom item: no stock is taken"
+        line.linked != null -> "From inventory · ${line.available ?: line.linked.quantity} ${line.linked.unit} available" + (line.linked.sku?.let { " · $it" } ?: "")
+        else -> "From inventory"
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth().bringIntoViewRequester(bringIntoView),
+        horizontalArrangement = Arrangement.spacedBy(Dimens.spaceM),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Column(Modifier.weight(1f)) {
+            FormField(
+                value = draft.product,
+                onValueChange = { onChange(draft.copy(product = it)) },
+                label = "Product name",
+                modifier = Modifier.focusRequester(nameFocus),
+                leadingIcon = if (linkedLine) Icons.Filled.Inventory else Icons.Filled.Inventory2,
+                error = if (line.showErrors) productError else null,
+                maxLength = Validation.MAX_PRODUCT,
+                readOnly = linkedLine,
+                supportingText = source,
+            )
+            Row {
+                if (linkedLine) {
+                    TextButton(onClick = onPick) { Text("Change") }
+                    TextButton(onClick = { onChange(draft.copy(productId = null)) }) { Text("Custom item") }
+                } else if (line.canPick) {
+                    TextButton(onClick = onPick) {
+                        Icon(Icons.Filled.Inventory, contentDescription = null, modifier = Modifier.size(Dimens.iconMedium))
+                        Text("  Choose from inventory")
+                    }
+                }
+            }
+        }
+        FormField(
+            value = draft.price,
+            onValueChange = { if (PRICE_INPUT.matches(it)) onChange(draft.copy(price = it)) },
+            label = "Unit price",
+            modifier = Modifier.width(ROW_PRICE_WIDTH),
+            prefix = Money.SYMBOL,
+            keyboardType = KeyboardType.Decimal,
+            error = if (line.showErrors) priceError else null,
+        )
+        QuantityField(
+            value = draft.quantity,
+            onValueChange = { text -> if (text.length <= 4 && text.all { it.isDigit() }) onChange(draft.copy(quantity = text)) },
+            error = (if (line.showErrors) qtyError else null) ?: line.stockError,
+            modifier = Modifier.width(ROW_QTY_WIDTH),
+        )
+        Text(
+            text = draft.lineTotal?.let { Money.format(it) } ?: "—",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.End,
+            maxLines = 1,
+            modifier = Modifier.width(ROW_TOTAL_WIDTH).padding(top = Dimens.spaceXl),
+        )
+        if (line.canRemove) {
+            IconButton(onClick = onRemove, modifier = Modifier.padding(top = Dimens.spaceXs)) {
+                Icon(Icons.Filled.Close, contentDescription = "Remove product ${line.index + 1}", tint = MaterialTheme.colorScheme.error)
+            }
+        } else {
+            Spacer(Modifier.width(Dimens.touchTarget))
+        }
+    }
+}
+
+private val ORDER_DIALOG_MAX_WIDTH = 820.dp
+private val ITEM_ROW_MIN_WIDTH = 640.dp
+private val ROW_PRICE_WIDTH = 132.dp
+private val ROW_QTY_WIDTH = 140.dp
+private val ROW_TOTAL_WIDTH = 104.dp
 
 /** Material's TimePicker needs a dialog around it; this one sizes itself to the picker. */
 @OptIn(ExperimentalMaterial3Api::class)

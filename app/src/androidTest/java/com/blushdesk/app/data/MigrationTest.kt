@@ -8,6 +8,7 @@ import com.blushdesk.app.data.local.database.MIGRATION_1_2
 import com.blushdesk.app.data.local.database.MIGRATION_2_3
 import com.blushdesk.app.data.local.database.MIGRATION_3_4
 import com.blushdesk.app.data.local.database.MIGRATION_4_5
+import com.blushdesk.app.data.local.database.MIGRATION_5_6
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -211,6 +212,51 @@ class MigrationTest {
                 "VALUES (1, 'INITIAL', 0, 20, 20, NULL, '', '', '', 'Lia', 3000, 3000)",
         )
         db.execSQL("INSERT INTO order_items (orderId, position, productName, unitPrice, quantity, lineTotal, productId) VALUES (7, 2, 'USB Keyboard', 85000, 1, 85000, 1)")
+        db.close()
+    }
+
+    @Test
+    fun migrate_5_to_6_records_paid_orders_as_payments_and_unpends_the_rest() {
+        helper.createDatabase(dbName, 5).apply {
+            execSQL("INSERT INTO operator_profile (id, fullName, storeName, email, phoneNumber, profileImageUri, createdAt, updatedAt) VALUES (1, 'Lia', 'Rose Showroom', '', '', NULL, 1, 1)")
+            execSQL(
+                "INSERT INTO buyers (id, fullName, contactNumber, facebookName, email, dateAdded, profileImageUri, createdAt, updatedAt) " +
+                    "VALUES (1, 'Ana', '0917 123 4567', '', '', 1000, NULL, 1000, 1000)",
+            )
+            execSQL(
+                "INSERT INTO orders (id, buyerId, totalAmount, purchaseDateTime, paymentMode, paymentStatus, fulfillmentStatus, createdAt, updatedAt) " +
+                    "VALUES (5, 1, 1030000, 2000, 'ONLINE_PAYMENT', 'PAID', 'PROCESSING', 2000, 4000)",
+            )
+            execSQL(
+                "INSERT INTO orders (id, buyerId, totalAmount, purchaseDateTime, paymentMode, paymentStatus, fulfillmentStatus, createdAt, updatedAt) " +
+                    "VALUES (6, 1, 2680000, 3000, 'CASH', 'PENDING', 'PROCESSING', 3000, 3000)",
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(dbName, 6, true, MIGRATION_5_6)
+
+        db.query("SELECT orderId, amount, paidAt, paymentMode, createdAt FROM payments").use { c ->
+            assertEquals("only the paid order gets a payment", 1, c.count)
+            c.moveToFirst()
+            assertEquals(5L, c.getLong(0))
+            assertEquals(1030000L, c.getLong(1))
+            assertEquals("dated when the order was last updated", 4000L, c.getLong(2))
+            assertEquals("ONLINE_PAYMENT", c.getString(3))
+        }
+        db.query("SELECT id, paymentStatus, numberPrefix, deliveryAddress, deliveryDate FROM orders ORDER BY id").use { c ->
+            c.moveToFirst()
+            assertEquals("PAID", c.getString(1))
+            assertEquals("BD", c.getString(2))
+            assertEquals("", c.getString(3))
+            assertTrue(c.isNull(4))
+            c.moveToNext()
+            assertEquals("a pending order recorded no amount, so it is unpaid", "UNPAID", c.getString(1))
+        }
+        db.query("SELECT orderPrefix FROM operator_profile").use { c ->
+            c.moveToFirst()
+            assertEquals("BD", c.getString(0))
+        }
         db.close()
     }
 

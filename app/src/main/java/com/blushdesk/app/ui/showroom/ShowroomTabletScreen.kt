@@ -14,11 +14,24 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Inventory
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.ShoppingBag
+import androidx.compose.material.icons.filled.TableChart
+import androidx.compose.material.icons.filled.Today
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -43,16 +56,20 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.blushdesk.app.data.backup.BackupStatus
 import com.blushdesk.app.data.local.database.InventorySummary
-import com.blushdesk.app.domain.model.PaymentStatus
+import com.blushdesk.app.data.local.database.OperatorProfile
 import com.blushdesk.app.ui.buyer.AddBuyerDialog
 import com.blushdesk.app.ui.buyer.BuyerDetailActions
 import com.blushdesk.app.ui.buyer.BuyerDetailScreen
 import com.blushdesk.app.ui.buyer.EditBuyerDialog
+import com.blushdesk.app.ui.components.Avatar
 import com.blushdesk.app.ui.components.DeleteConfirmationDialog
 import com.blushdesk.app.ui.components.LoadingIndicator
 import com.blushdesk.app.ui.components.PhotoActions
+import com.blushdesk.app.ui.components.SegmentedChoice
 import com.blushdesk.app.ui.components.ShowroomSnackbarHost
 import com.blushdesk.app.ui.components.show
 import com.blushdesk.app.ui.export.ExportChoiceDialog
@@ -61,10 +78,13 @@ import com.blushdesk.app.ui.inventory.InventoryUiState
 import com.blushdesk.app.ui.export.ExportSavedDialog
 import com.blushdesk.app.ui.operator.EditOperatorProfileDialog
 import com.blushdesk.app.ui.order.AddOrderDialog
+import com.blushdesk.app.ui.order.DeliveryDialog
 import com.blushdesk.app.ui.order.EditOrderDialog
 import com.blushdesk.app.ui.order.OrderActions
 import com.blushdesk.app.ui.order.ReceiptReadyDialog
+import com.blushdesk.app.ui.order.RecordPaymentDialog
 import com.blushdesk.app.ui.theme.Dimens
+import com.blushdesk.app.ui.theme.ShowroomTheme
 import com.blushdesk.app.utils.APP_NAME
 import com.blushdesk.app.utils.AppFiles
 import com.blushdesk.app.utils.ExportDocument
@@ -72,6 +92,10 @@ import com.blushdesk.app.utils.Formats
 import com.blushdesk.app.utils.ReceiptDocument
 import com.blushdesk.app.utils.Sharing
 import kotlinx.coroutines.launch
+import java.time.Instant
+
+/** The showroom's two views: what needs doing today, or the buyers and their orders. */
+enum class ShowroomView(val label: String) { TODAY("Today"), BUYERS("Buyers") }
 
 /**
  * Which modal, if any, is open. Only one at a time, so a single value is enough.
@@ -91,6 +115,8 @@ private sealed interface ActiveDialog {
     data class EditOrder(val orderId: Long) : ActiveDialog
     data class DeleteBuyer(val buyerId: Long) : ActiveDialog
     data class DeleteOrder(val orderId: Long) : ActiveDialog
+    data class RecordPayment(val orderId: Long) : ActiveDialog
+    data class EditDelivery(val orderId: Long) : ActiveDialog
     data object Export : ActiveDialog
     data class ExportBuyer(val buyerId: Long) : ActiveDialog
 
@@ -115,6 +141,8 @@ private val ActiveDialogSaver = listSaver<ActiveDialog, Any>(
             is ActiveDialog.EditOrder -> listOf("editOrder", dialog.orderId)
             is ActiveDialog.DeleteBuyer -> listOf("deleteBuyer", dialog.buyerId)
             is ActiveDialog.DeleteOrder -> listOf("deleteOrder", dialog.orderId)
+            is ActiveDialog.RecordPayment -> listOf("recordPayment", dialog.orderId)
+            is ActiveDialog.EditDelivery -> listOf("editDelivery", dialog.orderId)
         }
     },
     restore = { saved ->
@@ -129,6 +157,8 @@ private val ActiveDialogSaver = listSaver<ActiveDialog, Any>(
             "editOrder" -> id?.let(ActiveDialog::EditOrder)
             "deleteBuyer" -> id?.let(ActiveDialog::DeleteBuyer)
             "deleteOrder" -> id?.let(ActiveDialog::DeleteOrder)
+            "recordPayment" -> id?.let(ActiveDialog::RecordPayment)
+            "editDelivery" -> id?.let(ActiveDialog::EditDelivery)
             else -> null
         } ?: ActiveDialog.None
     },
@@ -146,6 +176,10 @@ fun ShowroomTabletScreen(
     inventory: InventorySummary = InventoryUiState.EMPTY_SUMMARY,
     unreadNotifications: Int = 0,
     onOpenInventory: () -> Unit = {},
+    backup: BackupStatus = BackupStatus(),
+    onOpenBackup: () -> Unit = {},
+    /** Opens the PIN lock settings; null hides the menu item. */
+    onOpenPinLock: (() -> Unit)? = null,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -154,6 +188,7 @@ fun ShowroomTabletScreen(
 
     var dialog by rememberSaveable(stateSaver = ActiveDialogSaver) { mutableStateOf<ActiveDialog>(ActiveDialog.None) }
     var showDetailWhenCompact by rememberSaveable { mutableStateOf(false) }
+    var view by rememberSaveable { mutableStateOf(ShowroomView.BUYERS) }
     var askedForProfile by rememberSaveable { mutableStateOf(false) }
 
     val photoActions = remember(viewModel) {
@@ -169,7 +204,7 @@ fun ShowroomTabletScreen(
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
             when (event) {
-                is UiEvent.Success -> scope.launch { snackbar.show(event.message, isError = false) }
+                is UiEvent.Success -> scope.launch { snackbar.show(event.message, isError = false, undo = event.undo) }
                 is UiEvent.Error -> scope.launch { snackbar.show(event.message, isError = true) }
                 is UiEvent.ReceiptReady -> dialog = ActiveDialog.ReceiptReady(event.receipt)
                 is UiEvent.ShareWorkbook -> {
@@ -198,6 +233,8 @@ fun ShowroomTabletScreen(
             is ActiveDialog.ExportBuyer -> detail.buyer.id != open.buyerId
             is ActiveDialog.EditOrder -> detail.orders.none { it.order.id == open.orderId }
             is ActiveDialog.DeleteOrder -> detail.orders.none { it.order.id == open.orderId }
+            is ActiveDialog.RecordPayment -> detail.orders.none { it.order.id == open.orderId && !it.order.paymentStatus.isPaid }
+            is ActiveDialog.EditDelivery -> detail.orders.none { it.order.id == open.orderId }
             else -> false
         }
         if (gone) dialog = ActiveDialog.None
@@ -232,9 +269,13 @@ fun ShowroomTabletScreen(
                 onEdit = { dialog = ActiveDialog.EditOrder(it.order.id) },
                 onDelete = { dialog = ActiveDialog.DeleteOrder(it.order.id) },
                 onAdvance = { viewModel.advanceOrder(it.order) },
-                onSetFulfillment = { order, status -> viewModel.setFulfillmentStatus(order.order.id, status) },
-                onMarkPaid = { viewModel.setPaymentStatus(it.order.id, PaymentStatus.PAID) },
+                onSetFulfillment = { order, status -> viewModel.setFulfillmentStatus(order.order, status) },
+                onMarkPaid = { viewModel.markPaid(it.order) },
                 onReceipt = { viewModel.generateReceipt(it.order.id) },
+                onRecordPayment = { dialog = ActiveDialog.RecordPayment(it.order.id) },
+                onDeletePayment = { viewModel.deletePayment(it) },
+                onOrderSlip = { viewModel.generateOrderSlip(it.order.id) },
+                onEditDelivery = { dialog = ActiveDialog.EditDelivery(it.order.id) },
             ),
         )
 
@@ -244,11 +285,19 @@ fun ShowroomTabletScreen(
             topBar = {
                 ShowroomTopBar(
                     subtitle = state.operator.storeName.ifBlank { "Showroom manager" },
-                    showBack = detailOnly,
+                    showBack = detailOnly && view == ShowroomView.BUYERS,
+                    view = view,
+                    onViewChange = { view = it },
+                    operator = state.operator,
+                    onEditProfile = { dialog = ActiveDialog.EditProfile },
+                    onExport = { dialog = ActiveDialog.Export },
+                    onOpenPinLock = onOpenPinLock,
                     onBack = { showDetailWhenCompact = false },
                     compact = compact,
                     unreadNotifications = unreadNotifications,
                     onOpenInventory = onOpenInventory,
+                    backup = backup,
+                    onOpenBackup = onOpenBackup,
                 )
             },
         ) { padding ->
@@ -260,18 +309,9 @@ fun ShowroomTabletScreen(
                         viewModel.selectBuyer(it)
                         showDetailWhenCompact = true
                     },
-                    onEditProfile = { dialog = ActiveDialog.EditProfile },
                     onAddBuyer = { dialog = ActiveDialog.AddBuyer },
                     inventory = inventory,
                     onOpenInventory = onOpenInventory,
-                    onExport = { dialog = ActiveDialog.Export },
-                    onAddOrder = {
-                        state.detail?.buyer?.let {
-                            dialog = ActiveDialog.AddOrder(it.id)
-                            showDetailWhenCompact = true
-                        }
-                    },
-                    pinTools = maxHeight >= Dimens.pinToolsMinHeight,
                     modifier = modifier,
                 )
             }
@@ -293,6 +333,23 @@ fun ShowroomTabletScreen(
 
             Box(modifier = Modifier.padding(padding).fillMaxSize()) {
                 when {
+                    view == ShowroomView.TODAY -> TodayScreen(
+                        state = state,
+                        backup = backup,
+                        onOpenOrder = { buyerId, orderId ->
+                            viewModel.openOrder(buyerId, orderId)
+                            showDetailWhenCompact = true
+                            view = ShowroomView.BUYERS
+                        },
+                        onOpenBuyer = {
+                            viewModel.selectBuyer(it)
+                            showDetailWhenCompact = true
+                            view = ShowroomView.BUYERS
+                        },
+                        onOpenInventory = onOpenInventory,
+                        onOpenBackup = onOpenBackup,
+                        modifier = Modifier.fillMaxSize(),
+                    )
                     detailOnly -> detail(Modifier.fillMaxSize())
                     compact -> master(Modifier.fillMaxSize())
                     else -> Row(modifier = Modifier.fillMaxSize()) {
@@ -348,8 +405,8 @@ fun ShowroomTabletScreen(
                 buyerId = buyer.id,
                 buyerName = buyer.fullName,
                 products = state.products,
-                onSave = { order, items ->
-                    viewModel.saveOrder(order, items)
+                onSave = { order, items, paidNow ->
+                    viewModel.saveOrder(order, items, paidNow)
                     dismiss()
                 },
                 onDismiss = dismiss,
@@ -399,13 +456,35 @@ fun ShowroomTabletScreen(
             DeleteConfirmationDialog(
                 title = "Delete this order?",
                 message = "${Formats.itemsSummary(order.items.map { it.productName })} " +
-                    "(${Formats.orderNumber(order.order.id)}) will be removed. This cannot be undone.",
+                    "(${Formats.orderNumber(order.order)}) will be removed. This cannot be undone.",
                 optionLabel = if (stocked) "Put its inventory items back in stock" else null,
                 optionChecked = restock,
                 onOptionChange = { restock = it },
                 optionHint = "Untick if the items were delivered or damaged and should not be counted again.",
                 onConfirm = {
                     viewModel.deleteOrder(order.order.id, restock = stocked && restock)
+                    dismiss()
+                },
+                onDismiss = dismiss,
+            )
+        }
+
+        is ActiveDialog.RecordPayment -> orderOf(active.orderId)?.let { order ->
+            RecordPaymentDialog(
+                order = order,
+                onSave = { amount, mode, paidAt, note ->
+                    viewModel.recordPayment(order.order, amount, mode, paidAt, note)
+                    dismiss()
+                },
+                onDismiss = dismiss,
+            )
+        }
+
+        is ActiveDialog.EditDelivery -> orderOf(active.orderId)?.let { order ->
+            DeliveryDialog(
+                order = order,
+                onSave = { address, date ->
+                    viewModel.setDelivery(order.order.id, address, date)
                     dismiss()
                 },
                 onDismiss = dismiss,
@@ -462,8 +541,8 @@ fun ShowroomTabletScreen(
                 share(
                     file = active.receipt.file,
                     mime = AppFiles.MIME_PDF,
-                    subject = "Receipt ${active.receipt.displayName}",
-                    title = "Share receipt",
+                    subject = "${if (active.receipt.isOrderSlip) "Order slip" else "Receipt"} ${active.receipt.displayName}",
+                    title = if (active.receipt.isOrderSlip) "Share order slip" else "Share receipt",
                     noAppMessage = "No app on this tablet can receive the receipt.",
                 )
             },
@@ -482,10 +561,18 @@ fun ShowroomTabletScreen(
 private fun ShowroomTopBar(
     subtitle: String,
     showBack: Boolean,
+    view: ShowroomView,
+    onViewChange: (ShowroomView) -> Unit,
+    operator: OperatorProfile,
+    onEditProfile: () -> Unit,
+    onExport: () -> Unit,
+    onOpenPinLock: (() -> Unit)?,
     onBack: () -> Unit,
     compact: Boolean,
     unreadNotifications: Int,
     onOpenInventory: () -> Unit,
+    backup: BackupStatus,
+    onOpenBackup: () -> Unit,
 ) {
     TopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -518,9 +605,27 @@ private fun ShowroomTopBar(
                         Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
+                if (!compact) {
+                    SegmentedChoice(
+                        options = ShowroomView.entries,
+                        selected = view,
+                        label = { it.label },
+                        onSelect = onViewChange,
+                        modifier = Modifier.padding(start = Dimens.spaceXl).width(VIEW_SWITCH_WIDTH),
+                    )
+                }
             }
         },
         actions = {
+            if (compact) {
+                IconButton(onClick = { onViewChange(if (view == ShowroomView.TODAY) ShowroomView.BUYERS else ShowroomView.TODAY) }) {
+                    Icon(
+                        if (view == ShowroomView.TODAY) Icons.Filled.People else Icons.Filled.Today,
+                        contentDescription = if (view == ShowroomView.TODAY) "Show buyers" else "Show today",
+                    )
+                }
+            }
+            BackupChip(status = backup, compact = compact, onClick = onOpenBackup)
             Button(onClick = onOpenInventory, modifier = Modifier.padding(end = Dimens.spaceL)) {
                 Icon(Icons.Filled.Inventory, contentDescription = null, modifier = Modifier.size(Dimens.iconMedium))
                 Text(if (compact) "  Inventory" else "  Inventory System")
@@ -537,6 +642,91 @@ private fun ShowroomTopBar(
                     }
                 }
             }
+            OperatorMenu(operator = operator, onEditProfile = onEditProfile, onExport = onExport, onOpenBackup = onOpenBackup, onOpenPinLock = onOpenPinLock)
         },
+    )
+}
+
+/**
+ * The operator's photo (or initials) at the end of the top bar. It opens a menu with who is
+ * signed in to the tablet, their profile, the Excel export and backups: the things the left pane
+ * used to hold.
+ */
+@Composable
+private fun OperatorMenu(
+    operator: OperatorProfile,
+    onEditProfile: () -> Unit,
+    onExport: () -> Unit,
+    onOpenBackup: () -> Unit,
+    onOpenPinLock: (() -> Unit)?,
+) {
+    var open by remember { mutableStateOf(false) }
+    val name = operator.fullName.ifBlank { "Your profile" }
+    Box(Modifier.padding(end = Dimens.spaceM)) {
+        IconButton(onClick = { open = true }, modifier = Modifier.size(Dimens.touchTarget).semantics { contentDescription = "Open menu" }) {
+            Avatar(imageUri = operator.profileImageUri, name = name, size = Dimens.brandMark)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            Column(Modifier.padding(horizontal = Dimens.spaceL, vertical = Dimens.spaceS)) {
+                Text(name, style = MaterialTheme.typography.titleSmall)
+                if (operator.storeName.isNotBlank()) {
+                    Text(operator.storeName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            DropdownMenuItem(
+                text = { Text("Edit profile") },
+                leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+                onClick = { open = false; onEditProfile() },
+            )
+            DropdownMenuItem(
+                text = { Text("Export to Excel") },
+                leadingIcon = { Icon(Icons.Filled.TableChart, contentDescription = null) },
+                onClick = { open = false; onExport() },
+            )
+            DropdownMenuItem(
+                text = { Text("Backup and restore") },
+                leadingIcon = { Icon(Icons.Filled.Backup, contentDescription = null) },
+                onClick = { open = false; onOpenBackup() },
+            )
+            if (onOpenPinLock != null) {
+                DropdownMenuItem(
+                    text = { Text("PIN lock") },
+                    leadingIcon = { Icon(Icons.Filled.Lock, contentDescription = null) },
+                    onClick = { open = false; onOpenPinLock() },
+                )
+            }
+        }
+    }
+}
+
+private val VIEW_SWITCH_WIDTH = 220.dp
+
+/**
+ * How fresh the last backup is: amber when one is due (or there has never been one), green
+ * otherwise. Opens Backup and restore. On a narrow window only the icon shows.
+ */
+@Composable
+private fun BackupChip(status: BackupStatus, compact: Boolean, onClick: () -> Unit) {
+    val now = remember(status) { Instant.now() }
+    val due = status.isDue(now) || status.lastBackupAt == null
+    val tone = if (due) ShowroomTheme.colors.warning else ShowroomTheme.colors.success
+    val label = status.label(now)
+    val icon = if (due) Icons.Filled.Schedule else Icons.Filled.CloudDone
+    if (compact) {
+        IconButton(onClick = onClick) { Icon(icon, contentDescription = "$label. Open backup and restore", tint = tone.foreground) }
+        return
+    }
+    AssistChip(
+        onClick = onClick,
+        label = { Text(label) },
+        leadingIcon = { Icon(icon, contentDescription = null, modifier = Modifier.size(Dimens.iconMedium)) },
+        colors = AssistChipDefaults.assistChipColors(
+            containerColor = tone.background,
+            labelColor = tone.foreground,
+            leadingIconContentColor = tone.foreground,
+        ),
+        border = null,
+        modifier = Modifier.padding(end = Dimens.spaceS),
     )
 }

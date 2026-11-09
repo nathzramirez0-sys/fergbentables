@@ -317,7 +317,7 @@ private fun SaleLine(sale: ProductSale, unit: String) {
         horizontalArrangement = Arrangement.spacedBy(Dimens.spaceM),
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text("${Formats.orderNumber(sale.orderId)} · ${sale.buyerName}", style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${Formats.orderNumber(sale.orderId, sale.numberPrefix)} · ${sale.buyerName}", style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
                 "${Formats.dateTime(sale.purchaseDateTime)} · ${sale.quantity} $unit × ${Money.format(sale.unitPrice)}",
                 style = MaterialTheme.typography.bodySmall,

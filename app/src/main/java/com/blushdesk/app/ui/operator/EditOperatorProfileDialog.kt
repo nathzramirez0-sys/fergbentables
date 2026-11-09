@@ -5,6 +5,7 @@ import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Store
+import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -21,6 +22,7 @@ import com.blushdesk.app.ui.components.FormDialog
 import com.blushdesk.app.ui.components.FormField
 import com.blushdesk.app.ui.components.PhotoActions
 import com.blushdesk.app.ui.components.PhotoPickerField
+import com.blushdesk.app.utils.Formats
 import com.blushdesk.app.utils.Validation
 import kotlinx.coroutines.launch
 
@@ -42,6 +44,7 @@ fun EditOperatorProfileDialog(
     var email by rememberSaveable { mutableStateOf(initial.email) }
     var phone by rememberSaveable { mutableStateOf(initial.phoneNumber) }
     var imageUri by rememberSaveable { mutableStateOf(initial.profileImageUri) }
+    var prefix by rememberSaveable { mutableStateOf(initial.orderPrefix) }
 
     // A photo imported during this dialog that has not been saved yet. It is deleted again if the
     // user replaces it, removes it or cancels, so abandoned pictures do not pile up on disk.
@@ -52,11 +55,13 @@ fun EditOperatorProfileDialog(
     val storeError = Validation.name(storeName, "Showroom name")
     val emailError = Validation.email(email)
     val phoneError = Validation.phone(phone, required = false)
-    val valid = listOf(nameError, storeError, emailError, phoneError).all { it == null }
+    val prefixError = Validation.orderPrefix(prefix)
+    val valid = listOf(nameError, storeError, emailError, phoneError, prefixError).all { it == null }
     val hasChanges = fullName != initial.fullName ||
         storeName != initial.storeName ||
         email != initial.email ||
         phone != initial.phoneNumber ||
+        prefix != initial.orderPrefix ||
         imageUri != initial.profileImageUri
 
     fun cancel() {
@@ -80,6 +85,7 @@ fun EditOperatorProfileDialog(
                         email = email,
                         phoneNumber = phone,
                         profileImageUri = imageUri,
+                        orderPrefix = prefix,
                     ),
                 )
             }
@@ -140,9 +146,19 @@ fun EditOperatorProfileDialog(
             label = "Phone number",
             leadingIcon = Icons.Filled.Phone,
             keyboardType = KeyboardType.Phone,
-            imeAction = ImeAction.Done,
             error = if (attempted) phoneError else null,
             maxLength = 24,
+        )
+        FormField(
+            value = prefix,
+            onValueChange = { typed -> prefix = typed.uppercase().filter { it.isLetterOrDigit() }.take(4) },
+            label = "Order number prefix",
+            leadingIcon = Icons.Filled.Tag,
+            imeAction = ImeAction.Done,
+            capitalization = KeyboardCapitalization.Characters,
+            error = prefixError,
+            supportingText = "New orders are numbered ${Formats.orderNumber(42, prefix.ifBlank { OperatorProfile.DEFAULT_ORDER_PREFIX })}. " +
+                "Orders already made keep their numbers.",
         )
     }
 }

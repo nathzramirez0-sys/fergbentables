@@ -96,9 +96,10 @@ class PhotoStorage(private val context: Context) : PhotoStore {
         return sample
     }
 
-    private companion object {
+    companion object {
+        /** Under the app's files folder; backups copy it whole. */
         const val PHOTOS_DIR = "photos"
-        const val MAX_EDGE = 1024
-        const val JPEG_QUALITY = 85
+        private const val MAX_EDGE = 1024
+        private const val JPEG_QUALITY = 85
     }
 }

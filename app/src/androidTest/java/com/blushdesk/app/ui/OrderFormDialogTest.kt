@@ -7,6 +7,7 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -44,7 +45,7 @@ class OrderFormDialogTest {
 
     private fun showNewOrderForm() = compose.setContent {
         ShowroomPinkTheme {
-            AddOrderDialog(buyerId = 7, buyerName = "Ana Reyes", products = emptyList(), onSave = { order, items -> saved = order to items }, onDismiss = { dismissed = true })
+            AddOrderDialog(buyerId = 7, buyerName = "Ana Reyes", products = emptyList(), onSave = { order, items, _ -> saved = order to items }, onDismiss = { dismissed = true })
         }
     }
 
@@ -74,7 +75,7 @@ class OrderFormDialogTest {
         showNewOrderForm()
         repeat(3) { addLine() }
 
-        compose.onNodeWithText("Product 4").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Remove product 4").assertIsDisplayed()
         nameField(3).assertIsDisplayed().assertIsFocused()
     }
 
@@ -86,8 +87,8 @@ class OrderFormDialogTest {
         compose.onAllNodesWithContentDescription("Increase quantity")[0].performClick()
         compose.onAllNodesWithContentDescription("Increase quantity")[0].performClick()
 
-        // Once on the line, once in the order total.
-        compose.onAllNodesWithText("₱2,999.97").assertCountEquals(2)
+        // On the line, as the order total, and as the balance (nothing paid yet).
+        compose.onAllNodesWithText("₱2,999.97").assertCountEquals(3)
         compose.onNodeWithText("1 product · 3 units").assertExists()
     }
 

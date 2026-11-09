@@ -10,6 +10,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.lifecycle.lifecycleScope
 import com.blushdesk.app.ui.AppRoot
+import com.blushdesk.app.ui.backup.BackupViewModel
 import com.blushdesk.app.ui.inventory.InventoryViewModel
 import com.blushdesk.app.ui.showroom.ShowroomViewModel
 import com.blushdesk.app.ui.theme.ShowroomPinkTheme
@@ -22,6 +23,7 @@ class MainActivity : ComponentActivity() {
 
     private val showroom: ShowroomViewModel by viewModels { ShowroomViewModel.factory(container) }
     private val inventory: InventoryViewModel by viewModels { InventoryViewModel.factory(container) }
+    private val backup: BackupViewModel by viewModels { BackupViewModel.factory(container) }
 
     /** What a notification tap asked to open; cleared once the screen has handled it. */
     private val openRequests = MutableStateFlow<String?>(null)
@@ -40,6 +42,8 @@ class MainActivity : ComponentActivity() {
                 AppRoot(
                     showroom = showroom,
                     inventory = inventory,
+                    backup = backup,
+                    pinLock = container.pinLock,
                     openRequests = openRequests,
                     onOpenRequestHandled = { openRequests.value = null },
                 )
@@ -54,10 +58,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        // Back from the background long enough: the PIN lock (when it is on) covers the app again.
+        container.pinLock.onForeground()
         // Catch up on reminders that came due while the background job had not run yet.
         lifecycleScope.launch {
             runCatching { container.notifier.sync() }
         }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        container.pinLock.onBackground()
     }
 
     private fun handle(intent: Intent?) {

@@ -11,19 +11,23 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.blushdesk.app.data.local.database.Buyer
 import com.blushdesk.app.data.local.database.BuyerListItem
+import com.blushdesk.app.data.local.database.OpenOrder
 import com.blushdesk.app.data.local.database.OperatorProfile
 import com.blushdesk.app.data.local.database.Order
 import com.blushdesk.app.data.local.database.OrderItem
+import com.blushdesk.app.data.local.database.Payment
 import com.blushdesk.app.data.local.database.Product
 import com.blushdesk.app.data.local.database.ShowroomSummary
 import com.blushdesk.app.di.AppContainer
 import com.blushdesk.app.domain.model.BuyerDetail
 import com.blushdesk.app.domain.model.FulfillmentStatus
-import com.blushdesk.app.domain.model.PaymentStatus
+import com.blushdesk.app.domain.model.PaymentMode
 import com.blushdesk.app.domain.model.UserFacingException
 import com.blushdesk.app.domain.repository.ShowroomRepository
 import com.blushdesk.app.utils.DocumentService
 import com.blushdesk.app.utils.ExportDocument
+import com.blushdesk.app.utils.Formats
+import com.blushdesk.app.utils.Money
 import com.blushdesk.app.utils.PhotoStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -40,6 +44,8 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.math.BigDecimal
+import java.time.Instant
 
 /**
  * Holds the screen state and runs every user action: buyer selection and search, buyer and order
@@ -91,12 +97,21 @@ class ShowroomViewModel(
         }
     }
 
-    private data class Core(val operator: OperatorProfile, val summary: ShowroomSummary, val buyers: List<BuyerListItem>, val products: List<Product>)
+    private data class Today(val openOrders: List<OpenOrder>, val allBuyers: List<BuyerListItem>)
+    private val today: Flow<Today> = combine(repository.openOrders, repository.searchBuyers(""), ::Today)
+
+    private data class Core(
+        val operator: OperatorProfile,
+        val summary: ShowroomSummary,
+        val buyers: List<BuyerListItem>,
+        val products: List<Product>,
+        val today: Today,
+    )
     private data class Selection(val query: String, val buyerId: Long?, val detail: BuyerDetail?, val orderId: Long?, val busy: Busy)
     private data class Busy(val exporting: Boolean = false, val receiptOrderId: Long? = null)
 
     val uiState: StateFlow<ShowroomUiState> = combine(
-        combine(repository.operator, repository.summary, buyers, repository.products, ::Core),
+        combine(repository.operator, repository.summary, buyers, repository.products, today, ::Core),
         combine(query, selectedBuyerId, detail, selectedOrderId, busy, ::Selection),
     ) { core, selection ->
         ShowroomUiState(
@@ -112,6 +127,8 @@ class ShowroomViewModel(
             exporting = selection.busy.exporting,
             receiptOrderId = selection.busy.receiptOrderId,
             products = core.products,
+            openOrders = core.today.openOrders,
+            allBuyers = core.today.allBuyers,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), ShowroomUiState())
 
@@ -141,6 +158,12 @@ class ShowroomViewModel(
         selectedOrderId.value = orderId
     }
 
+    /** Shows [buyerId] with [orderId] expanded (from the Today view). */
+    fun openOrder(buyerId: Long, orderId: Long) {
+        selectedBuyerId.value = buyerId
+        selectedOrderId.value = orderId
+    }
+
     // ---- Operator ---------------------------------------------------------------------------
 
     fun saveOperator(profile: OperatorProfile) = act("Couldn't save your profile. Please try again.") {
@@ -164,9 +187,9 @@ class ShowroomViewModel(
 
     // ---- Orders -----------------------------------------------------------------------------
 
-    fun saveOrder(order: Order, items: List<OrderItem>) = act("Couldn't save the order. Please try again.") {
+    fun saveOrder(order: Order, items: List<OrderItem>, paidNow: BigDecimal = Money.ZERO) = act("Couldn't save the order. Please try again.") {
         val isNew = order.id == 0L
-        val id = repository.saveOrder(order, items)
+        val id = repository.saveOrder(order, items, paidNow)
         if (isNew) selectedOrderId.value = id
         emitSuccess(if (isNew) "Order added" else "Order updated")
         if (items.any { it.productId != null }) syncNotifications()
@@ -180,14 +203,53 @@ class ShowroomViewModel(
     /** One tap on "Move to <next stage>": always exactly one stage forward, never a skip. */
     fun advanceOrder(order: Order) {
         val next = order.fulfillmentStatus.next ?: return
-        setFulfillmentStatus(order.id, next)
+        setFulfillmentStatus(order, next)
     }
 
-    fun setFulfillmentStatus(orderId: Long, status: FulfillmentStatus) =
-        act("Couldn't update the order. Please try again.") { repository.setFulfillmentStatus(orderId, status) }
+    /** Moves the order to [status]; the snackbar can undo it, back to the stage it was at. */
+    fun setFulfillmentStatus(order: Order, status: FulfillmentStatus) {
+        if (status == order.fulfillmentStatus) return
+        val previous = order.fulfillmentStatus
+        act("Couldn't update the order. Please try again.") {
+            repository.setFulfillmentStatus(order.id, status)
+            emitSuccess("${Formats.orderNumber(order)} moved to ${status.label}") {
+                act("Couldn't undo that. Please try again.") { repository.setFulfillmentStatus(order.id, previous) }
+            }
+        }
+    }
 
-    fun setPaymentStatus(orderId: Long, status: PaymentStatus) =
-        act("Couldn't update the payment. Please try again.") { repository.setPaymentStatus(orderId, status) }
+    // ---- Payments ---------------------------------------------------------------------------
+
+    /** Records the whole balance as paid now. */
+    fun markPaid(order: Order) = act("Couldn't record the payment. Please try again.") {
+        val paymentId = repository.markPaid(order.id) ?: return@act
+        emitSuccess("${Formats.orderNumber(order)} marked as paid") { undoPayment(paymentId) }
+    }
+
+    /** Records money received: a downpayment, an installment or the rest of the balance. */
+    fun recordPayment(order: Order, amount: BigDecimal, mode: PaymentMode, paidAt: Instant, note: String) =
+        act("Couldn't record the payment. Please try again.") {
+            val paymentId = repository.recordPayment(order.id, amount, mode, paidAt, note)
+            emitSuccess("${Money.format(amount)} recorded for ${Formats.orderNumber(order)}") { undoPayment(paymentId) }
+        }
+
+    /** Removes a payment recorded by mistake; Undo records it again as it was. */
+    fun deletePayment(payment: Payment) = act("Couldn't remove the payment. Please try again.") {
+        repository.deletePayment(payment.id)
+        emitSuccess("Payment of ${Money.format(payment.amount)} removed") {
+            act("Couldn't undo that. Please try again.") {
+                repository.recordPayment(payment.orderId, payment.amount, payment.paymentMode, payment.paidAt, payment.note)
+            }
+        }
+    }
+
+    private fun undoPayment(paymentId: Long) =
+        act("Couldn't undo that. Please try again.") { repository.deletePayment(paymentId) }
+
+    fun setDelivery(orderId: Long, address: String, date: Instant?) = act("Couldn't save the delivery details. Please try again.") {
+        repository.setDelivery(orderId, address, date)
+        emitSuccess(if (address.isBlank() && date == null) "Delivery details cleared" else "Delivery details saved")
+    }
 
     // ---- Photos -----------------------------------------------------------------------------
 
@@ -213,6 +275,19 @@ class ShowroomViewModel(
         act("Couldn't create the receipt. Please try again.") {
             try {
                 _events.send(UiEvent.ReceiptReady(documents.createReceipt(orderId)))
+            } finally {
+                busy.update { it.copy(receiptOrderId = null) }
+            }
+        }
+    }
+
+    /** The PDF for an order that still has a balance: what was bought, paid so far, and what is due. */
+    fun generateOrderSlip(orderId: Long) {
+        if (busy.value.receiptOrderId != null) return
+        busy.update { it.copy(receiptOrderId = orderId) }
+        act("Couldn't create the order slip. Please try again.") {
+            try {
+                _events.send(UiEvent.ReceiptReady(documents.createOrderSlip(orderId)))
             } finally {
                 busy.update { it.copy(receiptOrderId = null) }
             }
@@ -262,8 +337,8 @@ class ShowroomViewModel(
 
     // ---- Plumbing ---------------------------------------------------------------------------
 
-    private fun emitSuccess(message: String) {
-        _events.trySend(UiEvent.Success(message))
+    private fun emitSuccess(message: String, undo: (() -> Unit)? = null) {
+        _events.trySend(UiEvent.Success(message, undo))
     }
 
     private fun emitError(message: String) {

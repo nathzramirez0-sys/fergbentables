@@ -9,9 +9,9 @@ import androidx.room.TypeConverters
 @Database(
     entities = [
         OperatorProfile::class, Buyer::class, Order::class, OrderItem::class,
-        Product::class, StockMovement::class, InventoryNotification::class,
+        Product::class, StockMovement::class, InventoryNotification::class, Payment::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -31,7 +31,7 @@ abstract class AppDatabase : RoomDatabase() {
          */
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context.applicationContext, AppDatabase::class.java, FILE_NAME)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .build()
     }
 }

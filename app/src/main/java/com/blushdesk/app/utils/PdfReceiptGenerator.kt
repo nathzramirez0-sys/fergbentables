@@ -34,13 +34,18 @@ import java.time.ZoneId
  * When the items do not fit, the table continues on further pages under a compact header, with
  * its column headings repeated. The total follows the last row. Every page has the footer, a page
  * number (when there is more than one) and a large semi-transparent PAID stamp.
+ *
+ * An order with a balance gets an order slip instead ([slip]): the same layout titled ORDER SLIP,
+ * with the total, what has been paid and the balance due, no PAID stamp, and a footer saying it is
+ * not a receipt.
  * Units are PDF points (1/72 in); A4 is 595 x 842.
  */
 class PdfReceiptGenerator {
 
     /**
      * Only a paid order may be receipted, so the rule lives here as well as in the UI: a caller
-     * that forgets to check cannot produce a "PAID" receipt for an unpaid order.
+     * that forgets to check cannot produce a "PAID" receipt for an unpaid order. Likewise an order
+     * slip is only for an order that still has a balance.
      */
     suspend fun generate(
         destination: File,
@@ -49,8 +54,13 @@ class PdfReceiptGenerator {
         order: OrderWithItems,
         zone: ZoneId = ZoneId.systemDefault(),
         issuedAt: Instant = Instant.now(),
+        slip: Boolean = false,
     ): File = withContext(Dispatchers.IO) {
-        require(order.order.paymentStatus.isPaid) { "A receipt can only be issued for a paid order" }
+        if (slip) {
+            require(!order.order.paymentStatus.isPaid) { "A paid order gets a receipt, not an order slip" }
+        } else {
+            require(order.order.paymentStatus.isPaid) { "A receipt can only be issued for a paid order" }
+        }
         require(order.order.buyerId == buyer.id) { "Order ${order.order.id} does not belong to buyer ${buyer.id}" }
         require(order.items.isNotEmpty()) { "Order ${order.order.id} has no items" }
 
@@ -59,7 +69,7 @@ class PdfReceiptGenerator {
         val avatar = AppFiles.localFile(operator.profileImageUri)?.let { loadSampled(it.path, AVATAR_DECODE_PX) }
         val document = PdfDocument()
         try {
-            val renderer = ReceiptRenderer(operator, buyer, order, zone, issuedAt, avatar)
+            val renderer = ReceiptRenderer(operator, buyer, order, zone, issuedAt, avatar, slip)
             val plan = renderer.paginate()
             plan.forEachIndexed { index, pagePlan ->
                 val page = document.startPage(PdfDocument.PageInfo.Builder(PAGE_W, PAGE_H, index + 1).create())
@@ -104,7 +114,10 @@ class PdfReceiptGenerator {
         private val zone: ZoneId,
         private val issuedAt: Instant,
         private val avatar: Bitmap?,
+        private val slip: Boolean,
     ) {
+        private val title = if (slip) "ORDER SLIP" else "RECEIPT"
+        private val totalHeight = if (slip) SLIP_TOTAL_H else TOTAL_H
         private lateinit var canvas: Canvas
         private val text = TextPaint(Paint.ANTI_ALIAS_FLAG)
         private val shape = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -120,7 +133,7 @@ class PdfReceiptGenerator {
         }
 
         private val storeName = operator.storeName.ifBlank { "Showroom" }
-        private val number = Formats.orderNumber(order.order.id)
+        private val number = Formats.orderNumber(order.order)
 
         // ---- Pagination ---------------------------------------------------------------------
 
@@ -148,7 +161,7 @@ class PdfReceiptGenerator {
                 current += row
                 y += row.height
             }
-            if (y + TOTAL_GAP + TOTAL_H > CONTENT_BOTTOM) {
+            if (y + TOTAL_GAP + totalHeight > CONTENT_BOTTOM) {
                 // The total does not fit under the last row: it moves to a page of its own.
                 pages += PagePlan(current, isFirst = pages.isEmpty(), showTotal = false)
                 current = mutableListOf()
@@ -169,9 +182,11 @@ class PdfReceiptGenerator {
             }
             var bottom = tableTop
             if (plan.rows.isNotEmpty()) bottom = table(tableTop, plan.rows)
-            if (plan.showTotal) total(bottom)
+            if (plan.showTotal) {
+                if (slip) balanceBox(bottom) else total(bottom)
+            }
             footer(pageNumber, pageCount)
-            paidStamp()
+            if (!slip) paidStamp()
         }
 
         // ---- Header band --------------------------------------------------------------------
@@ -184,7 +199,7 @@ class PdfReceiptGenerator {
 
             val textX = MARGIN + 86f
             val rightEdge = W - MARGIN
-            val titleWidth = 150f
+            val titleWidth = if (slip) 210f else 150f
             line(storeName, textX, 56f, 22f, BrandPalette.WHITE, bold = true, maxWidth = rightEdge - titleWidth - 14f - textX)
 
             var y = 78f
@@ -193,7 +208,7 @@ class PdfReceiptGenerator {
                 y += 15f
             }
 
-            line("RECEIPT", rightEdge, 56f, 30f, BrandPalette.WHITE, bold = true, align = Paint.Align.RIGHT, spacing = 0.08f)
+            line(title, rightEdge, 56f, if (slip) 26f else 30f, BrandPalette.WHITE, bold = true, align = Paint.Align.RIGHT, spacing = 0.08f)
             line("No. $number", rightEdge, 78f, 11.5f, BrandPalette.SOFT_PINK, bold = true, align = Paint.Align.RIGHT)
             line("Issued ${Formats.date(issuedAt, zone)}", rightEdge, 94f, 10.5f, BrandPalette.SOFT_PINK, align = Paint.Align.RIGHT)
         }
@@ -203,7 +218,7 @@ class PdfReceiptGenerator {
             rect(0f, 0f, W, CONT_HEADER_H, BrandPalette.DEEP_MAGENTA)
             rect(0f, CONT_HEADER_H, W, CONT_HEADER_H + 4f, BrandPalette.VIBRANT_ROSE)
             line(storeName, MARGIN, 40f, 16f, BrandPalette.WHITE, bold = true, maxWidth = 260f)
-            line("Receipt No. $number (continued)", W - MARGIN, 40f, 11f, BrandPalette.SOFT_PINK, bold = true, align = Paint.Align.RIGHT)
+            line("${if (slip) "Order slip" else "Receipt"} No. $number (continued)", W - MARGIN, 40f, 11f, BrandPalette.SOFT_PINK, bold = true, align = Paint.Align.RIGHT)
         }
 
         /** The operator's photo in a circle, or their initials on a soft-pink disc. */
@@ -339,6 +354,32 @@ class PdfReceiptGenerator {
             )
         }
 
+        /** The order slip's summary: the total, what was paid so far, and the balance due. */
+        private fun balanceBox(after: Float) {
+            val boxW = 290f
+            val left = W - MARGIN - boxW
+            val right = W - MARGIN - 18f
+            val top = after + TOTAL_GAP
+            roundRect(left, top, W - MARGIN, top + SLIP_TOTAL_H, 12f, BrandPalette.SOFT_PINK, null)
+            line("Order total", left + 18f, top + 26f, 10f, BrandPalette.MUTED_TEXT_ON_TINT)
+            line(Money.format(order.order.totalAmount), right, top + 26f, 11f, BrandPalette.DARK_TEXT, bold = true, align = Paint.Align.RIGHT, fitWidth = 150f)
+            val payments = order.payments.size
+            line(
+                if (payments <= 1) "Paid so far" else "Paid so far ($payments payments)",
+                left + 18f, top + 44f, 10f, BrandPalette.MUTED_TEXT_ON_TINT,
+            )
+            line(Money.format(order.paidAmount), right, top + 44f, 11f, BrandPalette.DARK_TEXT, bold = true, align = Paint.Align.RIGHT, fitWidth = 150f)
+            shape.style = Paint.Style.STROKE
+            shape.strokeWidth = 0.75f
+            shape.color = argb(BrandPalette.OUTLINE_SOFT)
+            canvas.drawLine(left + 18f, top + 54f, right, top + 54f, shape)
+            line("BALANCE DUE", left + 18f, top + 74f, 10f, BrandPalette.DEEP_MAGENTA, bold = true, spacing = 0.14f)
+            line(
+                Money.format(order.balance), right, top + 104f, 26f, BrandPalette.DEEP_MAGENTA,
+                bold = true, align = Paint.Align.RIGHT, fitWidth = boxW - 36f,
+            )
+        }
+
         // ---- Footer and watermark -----------------------------------------------------------
 
         private fun footer(pageNumber: Int, pageCount: Int) {
@@ -348,7 +389,12 @@ class PdfReceiptGenerator {
             canvas.drawLine(MARGIN, H - 96f, W - MARGIN, H - 96f, shape)
 
             line("Thank you for shopping with $storeName!", W / 2, H - 70f, 13f, BrandPalette.DEEP_MAGENTA, bold = true, align = Paint.Align.CENTER, maxWidth = W - 2 * MARGIN)
-            line("This is a computer-generated receipt and does not need a signature.", W / 2, H - 52f, 9f, BrandPalette.MUTED_TEXT, align = Paint.Align.CENTER)
+            val note = if (slip) {
+                "This order slip is not a receipt. A paid receipt is issued once the balance is settled."
+            } else {
+                "This is a computer-generated receipt and does not need a signature."
+            }
+            line(note, W / 2, H - 52f, 9f, BrandPalette.MUTED_TEXT, align = Paint.Align.CENTER, maxWidth = W - 2 * MARGIN)
             line("Generated ${Formats.dateTime(issuedAt, zone)} with $APP_NAME", W / 2, H - 38f, 8.5f, BrandPalette.MUTED_TEXT, align = Paint.Align.CENTER)
             if (pageCount > 1) {
                 line("Page $pageNumber of $pageCount", W - MARGIN, H - 20f, 8.5f, BrandPalette.MUTED_TEXT, bold = true, align = Paint.Align.RIGHT)
@@ -472,6 +518,7 @@ private const val ROW_PADDING = 13f
 private const val ROW_MIN_H = 40f
 private const val TOTAL_GAP = 20f
 private const val TOTAL_H = 88f
+private const val SLIP_TOTAL_H = 118f
 
 // Columns: item 52-252, unit price 262-372, qty 390-434, amount 440-543.
 // Numbers shrink to their column rather than overlap a neighbor or lose digits.

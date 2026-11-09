@@ -12,6 +12,7 @@ import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.SnackbarVisuals
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -19,20 +20,23 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.blushdesk.app.ui.theme.Dimens
 
-/** A snackbar message that knows whether it reports a success or an error. */
+/** A snackbar message that knows whether it reports a success or an error, and whether it can be undone. */
 class ShowroomSnackbarVisuals(
     override val message: String,
     val isError: Boolean,
+    canUndo: Boolean = false,
 ) : SnackbarVisuals {
-    override val actionLabel: String? = null
+    override val actionLabel: String? = if (canUndo) "Undo" else null
     override val withDismissAction: Boolean = isError
-    override val duration: SnackbarDuration = if (isError) SnackbarDuration.Long else SnackbarDuration.Short
+    // An undoable message stays a little longer, so there is time to reach the button.
+    override val duration: SnackbarDuration = if (isError || canUndo) SnackbarDuration.Long else SnackbarDuration.Short
 }
 
-/** Shows [message], replacing whatever snackbar is currently on screen. */
-suspend fun SnackbarHostState.show(message: String, isError: Boolean) {
+/** Shows [message], replacing whatever snackbar is currently on screen; [undo] runs if its Undo is tapped. */
+suspend fun SnackbarHostState.show(message: String, isError: Boolean, undo: (() -> Unit)? = null) {
     currentSnackbarData?.dismiss()
-    showSnackbar(ShowroomSnackbarVisuals(message, isError))
+    val result = showSnackbar(ShowroomSnackbarVisuals(message, isError, canUndo = undo != null))
+    if (result == SnackbarResult.ActionPerformed) undo?.invoke()
 }
 
 /**

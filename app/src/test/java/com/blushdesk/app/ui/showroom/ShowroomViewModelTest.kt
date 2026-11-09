@@ -55,7 +55,7 @@ class ShowroomViewModelTest {
         Buyer(fullName = name, contactNumber = contact, dateAdded = Instant.parse("2026-10-01T00:00:00Z"))
 
     /** An order header plus its product lines, as the order form hands them over. */
-    private class NewOrder(val order: Order, val items: List<OrderItem>)
+    private class NewOrder(val order: Order, val items: List<OrderItem>, val paidNow: BigDecimal)
 
     private fun item(product: String = "Sofa", unit: String = "1000.00", qty: Int = 1) =
         OrderItem(productName = product, unitPrice = Money.of(unit), quantity = qty)
@@ -69,16 +69,19 @@ class ShowroomViewModelTest {
         stage: FulfillmentStatus = FulfillmentStatus.PROCESSING,
         at: String = "2026-10-01T00:00:00Z",
         items: List<OrderItem> = listOf(item(product, unit, qty)),
+        /** Money received when the order was made; the payment status follows from it. */
+        paid: String = "0.00",
     ) = NewOrder(
         Order(
             buyerId = buyerId, purchaseDateTime = Instant.parse(at), paymentMode = PaymentMode.CASH,
             paymentStatus = pay, fulfillmentStatus = stage,
         ),
         items,
+        Money.of(paid),
     )
 
-    private suspend fun FakeRepository.saveOrder(new: NewOrder) = saveOrder(new.order, new.items)
-    private fun ShowroomViewModel.saveOrder(new: NewOrder) = saveOrder(new.order, new.items)
+    private suspend fun FakeRepository.saveOrder(new: NewOrder) = saveOrder(new.order, new.items, new.paidNow)
+    private fun ShowroomViewModel.saveOrder(new: NewOrder) = saveOrder(new.order, new.items, new.paidNow)
 
     /** Keeps uiState and the event stream hot for the duration of the test. */
     private fun TestScope.observe(): MutableList<UiEvent> {
@@ -249,16 +252,69 @@ class ShowroomViewModelTest {
     fun `dashboard totals add up paid and outstanding orders`() = runTest {
         observe()
         val id = repo.saveBuyer(buyer("Ana"))
-        repo.saveOrder(order(id, unit = "2500.00", qty = 2, pay = PaymentStatus.PAID, stage = FulfillmentStatus.DELIVERED))
-        repo.saveOrder(order(id, unit = "1000.00", qty = 1, pay = PaymentStatus.PENDING))
-        repo.saveOrder(order(id, unit = "500.00", qty = 3, pay = PaymentStatus.UNPAID, stage = FulfillmentStatus.PREPARING))
+        repo.saveOrder(order(id, unit = "2500.00", qty = 2, paid = "5000.00", stage = FulfillmentStatus.DELIVERED))
+        repo.saveOrder(order(id, unit = "1000.00", qty = 1, paid = "400.00"))
+        repo.saveOrder(order(id, unit = "500.00", qty = 3, stage = FulfillmentStatus.PREPARING))
         advanceUntilIdle()
 
         val totals = vm.uiState.value.detail!!.totals
         assertEquals(3, totals.orderCount)
         assertEquals(2, totals.openOrders)
-        assertEquals(BigDecimal("5000.00"), totals.paidAmount)
-        assertEquals(BigDecimal("2500.00"), totals.outstandingAmount)
+        assertEquals(BigDecimal("5400.00"), totals.paidAmount)
+        assertEquals(BigDecimal("2100.00"), totals.outstandingAmount)
+        assertEquals(
+            listOf(PaymentStatus.PAID, PaymentStatus.PENDING, PaymentStatus.UNPAID),
+            vm.uiState.value.detail!!.orders.sortedBy { it.order.id }.map { it.order.paymentStatus },
+        )
+    }
+
+    @Test
+    fun `marking paid records the balance, and undo takes it back`() = runTest {
+        val events = observe()
+        val id = repo.saveBuyer(buyer("Ana"))
+        val orderId = repo.saveOrder(order(id, unit = "26800.00", qty = 1, paid = "5000.00"))
+        advanceUntilIdle()
+        assertEquals(PaymentStatus.PENDING, repo.getOrder(orderId)!!.order.paymentStatus)
+        assertEquals(BigDecimal("21800.00"), repo.getOrder(orderId)!!.balance)
+
+        vm.markPaid(repo.getOrder(orderId)!!.order)
+        advanceUntilIdle()
+        assertEquals(PaymentStatus.PAID, repo.getOrder(orderId)!!.order.paymentStatus)
+        assertEquals(listOf("5000.00", "21800.00"), repo.getOrder(orderId)!!.payments.map { it.amount.toPlainString() })
+
+        val done = events.filterIsInstance<UiEvent.Success>().last()
+        assertEquals("BD-000001 marked as paid", done.message)
+        done.undo!!.invoke()
+        advanceUntilIdle()
+        assertEquals(PaymentStatus.PENDING, repo.getOrder(orderId)!!.order.paymentStatus)
+        assertEquals(BigDecimal("21800.00"), repo.getOrder(orderId)!!.balance)
+    }
+
+    @Test
+    fun `a payment above the balance is refused`() = runTest {
+        val events = observe()
+        val id = repo.saveBuyer(buyer("Ana"))
+        val orderId = repo.saveOrder(order(id, unit = "1000.00", qty = 1, paid = "600.00"))
+
+        vm.recordPayment(repo.getOrder(orderId)!!.order, Money.of("500.00"), PaymentMode.CASH, Instant.EPOCH, "")
+        advanceUntilIdle()
+
+        assertEquals("That is more than the balance of ₱400.00.", (events.last() as UiEvent.Error).message)
+        assertEquals(BigDecimal("400.00"), repo.getOrder(orderId)!!.balance)
+    }
+
+    @Test
+    fun `moving a stage can be undone`() = runTest {
+        val events = observe()
+        val buyerId = repo.saveBuyer(buyer("Ana"))
+        val orderId = repo.saveOrder(order(buyerId))
+
+        vm.advanceOrder(repo.getOrder(orderId)!!.order)
+        advanceUntilIdle()
+        (events.last() as UiEvent.Success).undo!!.invoke()
+        advanceUntilIdle()
+
+        assertEquals(FulfillmentStatus.PROCESSING, repo.getOrder(orderId)!!.order.fulfillmentStatus)
     }
 
     @Test
@@ -286,7 +342,7 @@ class ShowroomViewModelTest {
         val buyerId = repo.saveBuyer(buyer("Ana"))
         val orderId = repo.saveOrder(order(buyerId, stage = FulfillmentStatus.DELIVERED))
 
-        vm.setFulfillmentStatus(orderId, FulfillmentStatus.PROCESSING)
+        vm.setFulfillmentStatus(repo.getOrder(orderId)!!.order, FulfillmentStatus.PROCESSING)
         advanceUntilIdle()
 
         assertEquals(FulfillmentStatus.PROCESSING, repo.getOrder(orderId)!!.order.fulfillmentStatus)

@@ -14,6 +14,8 @@ data class ReceiptDocument(
     val displayName: String,
     /** "Download/<APP_NAME>/<name>", or null if the copy to Downloads failed (the local file is still good). */
     val savedTo: String?,
+    /** An order slip (an order with a balance) rather than a paid receipt. */
+    val isOrderSlip: Boolean = false,
 )
 
 /** A generated workbook, saved locally and ready for the share sheet or for Downloads. */
@@ -26,6 +28,9 @@ data class ExportDocument(val file: File, val displayName: String)
 interface DocumentService {
     /** The PDF receipt of a paid order, also copied to Downloads. */
     suspend fun createReceipt(orderId: Long): ReceiptDocument
+
+    /** The PDF order slip of an order with a balance, showing what is still due; also copied to Downloads. */
+    suspend fun createOrderSlip(orderId: Long): ReceiptDocument
 
     /** The .xlsx with every record in the database. */
     suspend fun createWorkbook(): ExportDocument
@@ -52,15 +57,21 @@ class AndroidDocumentService(
     private val downloads: DownloadsSaver,
 ) : DocumentService {
 
-    override suspend fun createReceipt(orderId: Long): ReceiptDocument {
+    override suspend fun createReceipt(orderId: Long): ReceiptDocument = createPdf(orderId, slip = false)
+
+    override suspend fun createOrderSlip(orderId: Long): ReceiptDocument = createPdf(orderId, slip = true)
+
+    private suspend fun createPdf(orderId: Long, slip: Boolean): ReceiptDocument {
         val order = repository.getOrder(orderId) ?: throw UserFacingException("That order no longer exists")
-        if (!order.order.paymentStatus.isPaid) throw UserFacingException("Mark the order as paid before issuing a receipt")
+        if (!slip && !order.order.paymentStatus.isPaid) throw UserFacingException("Mark the order as paid before issuing a receipt")
+        if (slip && order.order.paymentStatus.isPaid) throw UserFacingException("This order is paid. Make the paid receipt instead.")
         val buyer = repository.getBuyer(order.order.buyerId) ?: throw UserFacingException("That buyer no longer exists")
         val operator = repository.getOperator()
 
         val folder = AppFiles.cacheDir(context, AppFiles.RECEIPTS_DIR)
-        val name = "Receipt_${Formats.orderNumber(order.order.id)}_${Formats.fileSafe(buyer.fullName)}.pdf"
-        val file = pdf.generate(File(folder, name), operator, buyer, order)
+        val kind = if (slip) "OrderSlip" else "Receipt"
+        val name = "${kind}_${Formats.orderNumber(order.order)}_${Formats.fileSafe(buyer.fullName)}.pdf"
+        val file = pdf.generate(File(folder, name), operator, buyer, order, slip = slip)
 
         // The receipt is already complete in the cache; failing to copy it to Downloads must not lose it.
         val savedTo = try {
@@ -72,7 +83,7 @@ class AndroidDocumentService(
             null
         }
         AppFiles.prune(folder, keep = 20)
-        return ReceiptDocument(file, name, savedTo)
+        return ReceiptDocument(file, name, savedTo, isOrderSlip = slip)
     }
 
     override suspend fun createWorkbook(): ExportDocument {

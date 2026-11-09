@@ -13,7 +13,10 @@ import androidx.compose.ui.graphics.Color
  * (#212121) and muted (#757575) grays; containers and tints are pinks.
  */
 private val ShowroomLightColors = lightColorScheme(
-    primary = ShowroomColors.VibrantRose,
+    // Rose Deep, not Vibrant Rose: white 14 sp text on Vibrant Rose is 4.3:1, under the 4.5:1 small
+    // text needs, so filled buttons and pink text use the darker rose (5.9:1). Vibrant Rose stays
+    // for accents, the receipt and the logo.
+    primary = ShowroomColors.RoseDeep,
     onPrimary = ShowroomColors.White,
     primaryContainer = ShowroomColors.SoftPink,
     onPrimaryContainer = ShowroomColors.DeepMagenta,

@@ -187,16 +187,32 @@ class ShowroomDaoTest {
     fun order_totals_split_paid_from_outstanding() = runBlocking {
         val ana = dao.insertBuyer(TestData.buyer())
         dao.addOrder(ana, unit = "1000.00", qty = 1, pay = PaymentStatus.PAID, stage = FulfillmentStatus.DELIVERED)
-        dao.addOrder(ana, unit = "500.00", qty = 2, pay = PaymentStatus.PENDING, stage = FulfillmentStatus.PREPARING)
+        dao.addOrder(ana, unit = "500.00", qty = 2, pay = PaymentStatus.PENDING, stage = FulfillmentStatus.PREPARING) // ₱500 paid of ₱1,000
         dao.addOrder(ana, unit = "100.00", qty = 1, pay = PaymentStatus.UNPAID, stage = FulfillmentStatus.PROCESSING)
 
         val totals = dao.observeOrderTotals(ana).first()
 
         assertEquals(3, totals.orderCount)
         assertEquals(2, totals.openOrders)
-        assertEquals(Money.of("1000.00"), totals.paidAmount)
-        assertEquals(Money.of("1100.00"), totals.outstandingAmount)
+        assertEquals(Money.of("1500.00"), totals.paidAmount)
+        assertEquals(Money.of("600.00"), totals.outstandingAmount)
         assertEquals(Money.of("2100.00"), totals.totalAmount)
+    }
+
+    @Test
+    fun a_payment_above_the_total_never_counts_twice() = runBlocking {
+        val ana = dao.insertBuyer(TestData.buyer())
+        // Paid in full, then the order was edited down to ₱800.
+        val order = dao.addOrder(ana, unit = "1000.00", qty = 1, pay = PaymentStatus.PAID)
+        dao.updateOrder(dao.getOrder(order)!!.copy(totalAmount = Money.of("800.00")))
+
+        val totals = dao.observeOrderTotals(ana).first()
+        val summary = dao.observeShowroomSummary().first()
+
+        assertEquals(Money.of("800.00"), totals.paidAmount)
+        assertEquals(Money.ZERO, totals.outstandingAmount)
+        assertEquals(Money.of("800.00"), summary.paidAmount)
+        assertEquals(Money.ZERO, summary.outstandingAmount)
     }
 
     @Test

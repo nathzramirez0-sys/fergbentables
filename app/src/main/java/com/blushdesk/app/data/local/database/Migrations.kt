@@ -231,3 +231,41 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
         db.execSQL("CREATE INDEX IF NOT EXISTS `index_order_items_productId` ON `order_items` (`productId`)")
     }
 }
+
+/**
+ * Version 5 -> 6: payments. A `payments` table records each amount received (a downpayment, an
+ * installment, the rest of the balance), and an order's payment status now follows from them.
+ * Orders also get a delivery address and date, and the prefix of their number; the operator
+ * profile gets the prefix for new orders. Both prefixes start as BD, so every existing order keeps
+ * the number already printed on its receipt.
+ *
+ * Orders already marked paid get one payment of their full total, dated when they were last
+ * updated (the closest record of when they were paid), so their balance stays ₱0.00. "Pending"
+ * orders never recorded an amount, so they become unpaid with their whole total due.
+ */
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `operator_profile` ADD COLUMN `orderPrefix` TEXT NOT NULL DEFAULT 'BD'")
+        db.execSQL("ALTER TABLE `orders` ADD COLUMN `deliveryAddress` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE `orders` ADD COLUMN `deliveryDate` INTEGER")
+        db.execSQL("ALTER TABLE `orders` ADD COLUMN `numberPrefix` TEXT NOT NULL DEFAULT 'BD'")
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `payments` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `orderId` INTEGER NOT NULL,
+                `amount` INTEGER NOT NULL, `paidAt` INTEGER NOT NULL, `paymentMode` TEXT NOT NULL,
+                `note` TEXT NOT NULL, `createdAt` INTEGER NOT NULL,
+                FOREIGN KEY(`orderId`) REFERENCES `orders`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_payments_orderId` ON `payments` (`orderId`)")
+        db.execSQL(
+            """
+            INSERT INTO `payments` (orderId, amount, paidAt, paymentMode, note, createdAt)
+            SELECT id, totalAmount, updatedAt, paymentMode, 'Marked as paid before payments were recorded', updatedAt
+            FROM `orders` WHERE paymentStatus = 'PAID' AND totalAmount > 0
+            """.trimIndent(),
+        )
+        db.execSQL("UPDATE `orders` SET paymentStatus = 'UNPAID' WHERE paymentStatus = 'PENDING'")
+    }
+}

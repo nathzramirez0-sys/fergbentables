@@ -19,7 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.blushdesk.app.utils.ReceiptDocument
 
-/** Shown after a receipt is generated: where it was saved, and one tap to open or share it. */
+/** Shown after a receipt or order slip is generated: where it was saved, and one tap to open or share it. */
 @Composable
 fun ReceiptReadyDialog(
     receipt: ReceiptDocument,
@@ -34,7 +34,7 @@ fun ReceiptReadyDialog(
         icon = {
             Icon(Icons.Filled.PictureAsPdf, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
         },
-        title = { Text("Receipt ready") },
+        title = { Text(if (receipt.isOrderSlip) "Order slip ready" else "Receipt ready") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(receipt.displayName, style = MaterialTheme.typography.titleSmall)

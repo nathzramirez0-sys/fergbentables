@@ -1,6 +1,7 @@
 package com.blushdesk.app.ui.showroom
 
 import com.blushdesk.app.data.local.database.BuyerListItem
+import com.blushdesk.app.data.local.database.OpenOrder
 import com.blushdesk.app.data.local.database.OperatorProfile
 import com.blushdesk.app.data.local.database.Product
 import com.blushdesk.app.data.local.database.ShowroomSummary
@@ -25,8 +26,12 @@ data class ShowroomUiState(
     val exporting: Boolean = false,
     /** Id of the order whose receipt is being generated, if any. */
     val receiptOrderId: Long? = null,
-    /** The inventory, for the order form's product picker. */
+    /** The inventory, for the order form's product picker and the Today view's low-stock list. */
     val products: List<Product> = emptyList(),
+    /** Orders not delivered yet, across every buyer, soonest first (the Today view). */
+    val openOrders: List<OpenOrder> = emptyList(),
+    /** Every buyer whatever the search says, for the Today view's "To collect". */
+    val allBuyers: List<BuyerListItem> = emptyList(),
 ) {
     val isLoading: Boolean get() = !operatorLoaded || !buyersLoaded
 
@@ -50,7 +55,8 @@ data class ShowroomUiState(
 
 /** One-shot results the screen handles once: messages, a ready receipt, a workbook to share or one just saved. */
 sealed interface UiEvent {
-    data class Success(val message: String) : UiEvent
+    /** A done action; with [undo], the snackbar offers an Undo button that runs it. */
+    data class Success(val message: String, val undo: (() -> Unit)? = null) : UiEvent
     data class Error(val message: String) : UiEvent
     data class ReceiptReady(val receipt: ReceiptDocument) : UiEvent
     data class ShareWorkbook(val export: ExportDocument) : UiEvent

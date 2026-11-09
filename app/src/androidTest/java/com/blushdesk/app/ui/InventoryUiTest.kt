@@ -18,6 +18,8 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.blushdesk.app.TestData
+import com.blushdesk.app.data.backup.BackupService
+import com.blushdesk.app.data.backup.BackupStore
 import com.blushdesk.app.data.local.database.AppDatabase
 import com.blushdesk.app.data.local.database.Order
 import com.blushdesk.app.data.local.database.OrderItem
@@ -25,6 +27,7 @@ import com.blushdesk.app.data.local.database.Product
 import com.blushdesk.app.data.repository.OfflineInventoryRepository
 import com.blushdesk.app.data.repository.OfflineShowroomRepository
 import com.blushdesk.app.domain.model.AdjustmentReason
+import com.blushdesk.app.ui.backup.BackupViewModel
 import com.blushdesk.app.ui.components.PhotoActions
 import com.blushdesk.app.ui.inventory.InventoryScreen
 import com.blushdesk.app.ui.inventory.InventoryViewModel
@@ -34,6 +37,7 @@ import com.blushdesk.app.ui.order.AddOrderDialog
 import com.blushdesk.app.ui.showroom.ShowroomViewModel
 import com.blushdesk.app.ui.theme.ShowroomPinkTheme
 import com.blushdesk.app.utils.DocumentService
+import com.blushdesk.app.utils.DownloadsSaver
 import com.blushdesk.app.utils.ExportDocument
 import com.blushdesk.app.utils.Money
 import com.blushdesk.app.utils.PhotoStore
@@ -66,6 +70,7 @@ class InventoryUiTest {
     private val photoActions = PhotoActions(importPhoto = { null }, discard = {})
     private val noDocuments = object : DocumentService {
         override suspend fun createReceipt(orderId: Long): ReceiptDocument = error("unused")
+        override suspend fun createOrderSlip(orderId: Long): ReceiptDocument = error("unused")
         override suspend fun createWorkbook(): ExportDocument = error("unused")
         override suspend fun createBuyerWorkbook(buyerId: Long): ExportDocument = error("unused")
         override suspend fun createProductWorkbook(productId: Long): ExportDocument = error("unused")
@@ -89,11 +94,14 @@ class InventoryUiTest {
     private fun button(label: String) = compose.onNode(hasText(label, substring = true) and hasClickAction())
 
     @Test
-    fun the_export_button_is_now_inventory_system_and_export_moved_to_the_dashboard() {
+    fun the_export_button_is_now_inventory_system_and_export_moved_to_the_profile_menu() {
         runBlocking { showroomRepo.saveBuyer(TestData.buyer("Ana Reyes")) }
         val showroom = ShowroomViewModel(showroomRepo, noPhotos, noDocuments)
         val inventory = InventoryViewModel(inventoryRepo, noDocuments, syncNotifications = {})
-        compose.setContent { ShowroomPinkTheme { AppRoot(showroom, inventory, MutableStateFlow(null), onOpenRequestHandled = {}) } }
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val backupStore = BackupStore(context)
+        val backup = BackupViewModel(BackupService(context, db, DownloadsSaver(context), backupStore), backupStore)
+        compose.setContent { ShowroomPinkTheme { AppRoot(showroom, inventory, backup, MutableStateFlow(null), onOpenRequestHandled = {}) } }
         compose.waitUntil(TIMEOUT_MS) { compose.onAllNodesWithText("Ana Reyes").fetchSemanticsNodes().isNotEmpty() }
 
         compose.onAllNodesWithText("Export to Excel", substring = true).assertCountEquals(0)
@@ -102,8 +110,10 @@ class InventoryUiTest {
         compose.onNodeWithText("No products yet").assertIsDisplayed()
 
         compose.onNodeWithContentDescription("Back to the showroom").performClick()
-        button("Excel workbook").performClick() // the dashboard's Export tile
-        compose.onNodeWithText("Export to Excel").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Open menu").performClick() // the operator's avatar
+        compose.onNodeWithText("Export to Excel").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Export to Excel").assertIsDisplayed() // now the dialog's title
         button("Download to device").assertIsDisplayed()
     }
 
@@ -145,7 +155,7 @@ class InventoryUiTest {
         var saved: List<OrderItem>? = null
         compose.setContent {
             ShowroomPinkTheme {
-                AddOrderDialog(buyerId = 7, buyerName = "Ana Reyes", products = listOf(keyboard), onSave = { _: Order, items -> saved = items }, onDismiss = {})
+                AddOrderDialog(buyerId = 7, buyerName = "Ana Reyes", products = listOf(keyboard), onSave = { _: Order, items, _ -> saved = items }, onDismiss = {})
             }
         }
         button("Choose from inventory").performClick()

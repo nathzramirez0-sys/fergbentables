@@ -1,5 +1,7 @@
 package com.blushdesk.app.utils
 
+import com.blushdesk.app.data.local.database.OperatorProfile
+import com.blushdesk.app.data.local.database.Order
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -44,8 +46,12 @@ object Formats {
         else -> ""
     }
 
-    /** The receipt number printed on PDFs and shown on order cards: BD-000042. */
-    fun orderNumber(orderId: Long): String = "BD-" + orderId.toString().padStart(6, '0')
+    /** The receipt number printed on PDFs and shown on order cards: BD-000042, or RS-000042 with another prefix. */
+    fun orderNumber(orderId: Long, prefix: String = OperatorProfile.DEFAULT_ORDER_PREFIX): String =
+        prefix.ifBlank { OperatorProfile.DEFAULT_ORDER_PREFIX } + "-" + orderId.toString().padStart(6, '0')
+
+    /** The order's number with the prefix it was made with. */
+    fun orderNumber(order: Order): String = orderNumber(order.id, order.numberPrefix)
 
     /** "Velvet Sofa", "Velvet Sofa + 1 more", "Velvet Sofa + 3 more": a one-line name for an order. */
     fun itemsSummary(productNames: List<String>): String = when (productNames.size) {

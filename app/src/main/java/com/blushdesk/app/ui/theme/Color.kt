@@ -114,6 +114,10 @@ data class ShowroomExtendedColors(
     fun tone(status: FulfillmentStatus): ToneColors = BrandPalette.tone(status).toColors()
     fun tone(status: PaymentStatus): ToneColors = BrandPalette.tone(status).toColors()
     fun tone(status: StockStatus): ToneColors = BrandPalette.tone(status).toColors()
+
+    /** Amber and green for states that are not an order or stock status (a backup that is due or fresh). */
+    val warning: ToneColors get() = BrandPalette.tone(PaymentStatus.PENDING).toColors()
+    val success: ToneColors get() = BrandPalette.tone(PaymentStatus.PAID).toColors()
 }
 
 /** Built on first use, after [ShowroomColors] is complete, never during its initialization. */

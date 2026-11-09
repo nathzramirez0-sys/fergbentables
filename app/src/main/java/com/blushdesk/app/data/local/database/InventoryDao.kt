@@ -32,6 +32,7 @@ data class ProductSale(
     val lineTotal: BigDecimal,
     val paymentStatus: PaymentStatus,
     val fulfillmentStatus: FulfillmentStatus,
+    val numberPrefix: String = OperatorProfile.DEFAULT_ORDER_PREFIX,
 )
 
 /**
@@ -146,7 +147,7 @@ interface InventoryDao {
         """
         SELECT o.id AS orderId, b.id AS buyerId, b.fullName AS buyerName, o.purchaseDateTime AS purchaseDateTime,
                i.quantity AS quantity, i.unitPrice AS unitPrice, i.lineTotal AS lineTotal,
-               o.paymentStatus AS paymentStatus, o.fulfillmentStatus AS fulfillmentStatus
+               o.paymentStatus AS paymentStatus, o.fulfillmentStatus AS fulfillmentStatus, o.numberPrefix AS numberPrefix
         FROM order_items AS i
         JOIN orders AS o ON o.id = i.orderId
         JOIN buyers AS b ON b.id = o.buyerId
@@ -160,7 +161,7 @@ interface InventoryDao {
         """
         SELECT o.id AS orderId, b.id AS buyerId, b.fullName AS buyerName, o.purchaseDateTime AS purchaseDateTime,
                i.quantity AS quantity, i.unitPrice AS unitPrice, i.lineTotal AS lineTotal,
-               o.paymentStatus AS paymentStatus, o.fulfillmentStatus AS fulfillmentStatus
+               o.paymentStatus AS paymentStatus, o.fulfillmentStatus AS fulfillmentStatus, o.numberPrefix AS numberPrefix
         FROM order_items AS i
         JOIN orders AS o ON o.id = i.orderId
         JOIN buyers AS b ON b.id = o.buyerId

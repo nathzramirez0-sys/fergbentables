@@ -47,7 +47,7 @@ fun OrderHeadline(order: OrderWithItems, modifier: Modifier = Modifier) {
                     "${single.quantity} × ${Money.format(single.unitPrice)}"
                 } else {
                     "${items.size} items · ${order.unitCount} units"
-                } + "  ·  ${Formats.orderNumber(order.order.id)}",
+                } + "  ·  ${Formats.orderNumber(order.order)}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

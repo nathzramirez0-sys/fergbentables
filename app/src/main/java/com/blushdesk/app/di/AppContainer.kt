@@ -1,9 +1,12 @@
 package com.blushdesk.app.di
 
 import android.content.Context
+import com.blushdesk.app.data.backup.BackupService
+import com.blushdesk.app.data.backup.BackupStore
 import com.blushdesk.app.data.local.database.AppDatabase
 import com.blushdesk.app.data.repository.OfflineInventoryRepository
 import com.blushdesk.app.data.repository.OfflineShowroomRepository
+import com.blushdesk.app.data.security.PinLock
 import com.blushdesk.app.domain.repository.InventoryRepository
 import com.blushdesk.app.notifications.InventoryNotifier
 import com.blushdesk.app.domain.repository.ShowroomRepository
@@ -42,5 +45,13 @@ class AppContainer(context: Context) {
             pdf = PdfReceiptGenerator(),
             downloads = DownloadsSaver(appContext),
         )
+    }
+
+    val backupStore: BackupStore by lazy { BackupStore(appContext) }
+
+    val pinLock: PinLock by lazy { PinLock(appContext) }
+
+    val backups: BackupService by lazy {
+        BackupService(context = appContext, database = database, downloads = DownloadsSaver(appContext), store = backupStore)
     }
 }

@@ -57,15 +57,32 @@ class DocumentServiceAndroidTest {
         val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         context.contentResolver.query(
             collection, arrayOf(MediaStore.Downloads._ID),
-            "${MediaStore.Downloads.DISPLAY_NAME} LIKE ?", arrayOf("Receipt_BD-%"), null,
+            "${MediaStore.Downloads.DISPLAY_NAME} LIKE ? OR ${MediaStore.Downloads.DISPLAY_NAME} LIKE ?", arrayOf("Receipt_BD-%", "OrderSlip_BD-%"), null,
         )?.use { c -> while (c.moveToNext()) context.contentResolver.delete(ContentUris.withAppendedId(collection, c.getLong(0)), null, null) }
     }
 
+    /** A buyer with one order, paid in full ([PaymentStatus.PAID]) or with a ₱1,000 downpayment. */
     private fun seed(paid: PaymentStatus): Pair<Long, Long> = runBlocking {
         repository.saveOperator(TestData.operator)
         val buyerId = repository.saveBuyer(TestData.buyer("Ana Reyes"))
-        val orderId = repository.saveOrder(TestData.order(buyerId, pay = paid), listOf(TestData.item(), TestData.item("Throw Pillow", "450", 4)))
+        val items = listOf(TestData.item(), TestData.item("Throw Pillow", "450", 4))
+        val orderId = repository.saveOrder(TestData.order(buyerId), items, paidNow = Money.of("1000.00"))
+        if (paid == PaymentStatus.PAID) repository.markPaid(orderId)
+        assertEquals(paid, repository.getOrder(orderId)!!.order.paymentStatus)
         buyerId to orderId
+    }
+
+    @Test
+    fun order_slip_for_a_partly_paid_order_is_created_with_its_own_name() = runBlocking {
+        val (_, orderId) = seed(PaymentStatus.PENDING)
+
+        val slip = service.createOrderSlip(orderId)
+
+        assertTrue(slip.file.exists())
+        assertTrue(slip.isOrderSlip)
+        assertEquals("OrderSlip_BD-${orderId.toString().padStart(6, '0')}_Ana_Reyes.pdf", slip.displayName)
+        val header = slip.file.inputStream().use { String(it.readNBytes(4)) }
+        assertEquals("%PDF", header)
     }
 
     @Test

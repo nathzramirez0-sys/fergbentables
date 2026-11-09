@@ -238,14 +238,15 @@ class ExcelExporterTest {
     }
 
     @Test
-    fun `orders sheet keeps the specified columns plus the order total`() = runTest {
+    fun `orders sheet keeps the specified columns plus the order total, paid and balance`() = runTest {
         XSSFWorkbook(export().inputStream()).use { wb ->
             assertEquals(
                 listOf(
                     "Order ID", "Buyer ID", "Buyer Name", "Product", "Unit Price", "Quantity", "Total Amount",
                     "Purchase Date", "Purchase Time", "Payment Mode", "Payment Status", "Fulfillment Status", "Order Total",
+                    "Amount Paid", "Balance",
                 ),
-                wb.getSheet("Orders").headers(13),
+                wb.getSheet("Orders").headers(15),
             )
         }
     }
@@ -273,7 +274,7 @@ class ExcelExporterTest {
             assertEquals(1_800.00, sheet.number(4, 6), 0.0) // 450 x 4
             assertEquals(5_300.00, sheet.number(3, 12), 0.0)
             assertEquals(5_300.00, sheet.number(4, 12), 0.0)
-            assertEquals("Pending", sheet.text(4, 10))
+            assertEquals("Partly paid", sheet.text(4, 10))
             assertEquals("Ana Reyes", sheet.text(4, 2))
 
             assertEquals(2_999.97, sheet.number(2, 6), 0.0) // 999.99 x 3, exact
@@ -322,7 +323,7 @@ class ExcelExporterTest {
             }
             assertEquals(
                 listOf(
-                    "Total Buyers", "Total Orders", "Paid Orders", "Unpaid Orders", "Pending Orders",
+                    "Total Buyers", "Total Orders", "Paid Orders", "Unpaid Orders", "Partly Paid Orders",
                     "Processing Orders", "Preparing Orders", "Delivered Orders", "Total Recorded Sales",
                 ),
                 figures.keys.toList(),

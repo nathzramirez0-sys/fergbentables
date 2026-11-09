@@ -1,8 +1,7 @@
 package com.blushdesk.app.ui.showroom
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -11,206 +10,170 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Inventory
-import androidx.compose.material.icons.filled.TableChart
+import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.sp
 import com.blushdesk.app.data.local.database.InventorySummary
 import com.blushdesk.app.data.local.database.ShowroomSummary
-import com.blushdesk.app.domain.model.StockStatus
-import com.blushdesk.app.ui.inventory.InventoryUiState
 import com.blushdesk.app.ui.components.AmountText
-import com.blushdesk.app.ui.components.OperatorProfileCard
 import com.blushdesk.app.ui.components.ShowroomSearchBar
 import com.blushdesk.app.ui.components.buyerList
+import com.blushdesk.app.ui.inventory.InventoryUiState
 import com.blushdesk.app.ui.theme.Dimens
 import com.blushdesk.app.ui.theme.ShowroomTheme
 import com.blushdesk.app.utils.Money
 
 /**
- * The left pane, the dashboard: the operator profile card, showroom totals, the Inventory and
- * Export tiles, search, quick actions and the buyer list. Everything is one LazyColumn so on a
- * short window the card scrolls away and the list gets the height; on a tall one the search and
- * actions stay pinned ([pinTools]).
+ * The left pane: showroom figures in one strip, search, filters (all buyers, those with a balance,
+ * those with something to deliver), the buyer list with its sort switch, and Add buyer at the
+ * bottom. The operator's profile and the Excel export live in the top bar's menu, which leaves
+ * the height to the buyers.
  *
  * Its background is plain white (surface) so every gray caption on it keeps full contrast.
  */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MasterPane(
     state: ShowroomUiState,
     onQueryChange: (String) -> Unit,
     onSelectBuyer: (Long) -> Unit,
-    onEditProfile: () -> Unit,
     onAddBuyer: () -> Unit,
-    onAddOrder: () -> Unit,
     modifier: Modifier = Modifier,
-    pinTools: Boolean = true,
     inventory: InventorySummary = InventoryUiState.EMPTY_SUMMARY,
     onOpenInventory: () -> Unit = {},
-    onExport: () -> Unit = {},
 ) {
-    val tools: @Composable () -> Unit = {
+    var filter by rememberSaveable { mutableStateOf(BuyerFilter.ALL) }
+    var sort by rememberSaveable { mutableStateOf(BuyerSort.NAME) }
+    val shown = remember(state.buyers, filter, sort) { state.buyers.filteredAndSorted(filter, sort) }
+
+    Column(modifier = modifier.background(MaterialTheme.colorScheme.surface)) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surface)
-                .padding(vertical = Dimens.spaceXs),
+            modifier = Modifier.padding(start = Dimens.spaceL, end = Dimens.spaceL, top = Dimens.spaceL, bottom = Dimens.spaceS),
             verticalArrangement = Arrangement.spacedBy(Dimens.spaceM),
         ) {
+            SummaryStrip(state.summary, inventory, onOpenInventory)
             ShowroomSearchBar(state.query, onQueryChange)
-            Row(horizontalArrangement = Arrangement.spacedBy(Dimens.spaceS)) {
-                Button(onClick = onAddBuyer, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Filled.PersonAdd, contentDescription = null, modifier = Modifier.size(Dimens.iconMedium))
-                    Text("  Add buyer", maxLines = 1)
-                }
-                FilledTonalButton(
-                    onClick = onAddOrder,
-                    enabled = state.detail != null,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(Dimens.iconMedium))
-                    Text("  Add order", maxLines = 1)
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(Dimens.spaceS),
+            ) {
+                BuyerFilter.entries.forEach { option ->
+                    val selected = option == filter
+                    FilterChip(
+                        selected = selected,
+                        onClick = { filter = option },
+                        label = { Text("${option.label} · ${state.buyers.count(option::matches)}") },
+                        leadingIcon = if (selected) {
+                            { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize)) }
+                        } else {
+                            null
+                        },
+                    )
                 }
             }
         }
-    }
-
-    LazyColumn(
-        modifier = modifier.background(MaterialTheme.colorScheme.surface),
-        contentPadding = PaddingValues(start = Dimens.spaceL, end = Dimens.spaceL, top = Dimens.spaceL, bottom = Dimens.spaceXxl),
-        verticalArrangement = Arrangement.spacedBy(Dimens.spaceS),
-    ) {
-        item(key = "profile") { OperatorProfileCard(state.operator, onEditProfile) }
-        item(key = "summary") {
-            SummaryStrip(state.summary, modifier = Modifier.padding(vertical = Dimens.spaceXs))
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(start = Dimens.spaceL, end = Dimens.spaceL, bottom = Dimens.spaceL),
+            verticalArrangement = Arrangement.spacedBy(Dimens.spaceS),
+        ) {
+            buyerList(
+                buyers = shown,
+                loaded = state.buyersLoaded,
+                searching = state.query.isNotBlank(),
+                selectedBuyerId = state.selectedBuyerId,
+                onSelect = onSelectBuyer,
+                filterMessage = filter.emptyMessage.takeIf { filter != BuyerFilter.ALL && state.buyers.isNotEmpty() },
+                headerAction = {
+                    TextButton(onClick = { sort = if (sort == BuyerSort.NAME) BuyerSort.MOST_DUE else BuyerSort.NAME }) {
+                        Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null, modifier = Modifier.size(Dimens.iconMedium))
+                        Text("  Sort: ${sort.label}")
+                    }
+                },
+            )
         }
-        item(key = "shortcuts") {
-            Row(horizontalArrangement = Arrangement.spacedBy(Dimens.spaceS), modifier = Modifier.padding(bottom = Dimens.spaceXs)) {
-                DashboardTile(
-                    icon = Icons.Filled.Inventory,
-                    title = "Inventory",
-                    caption = inventoryCaption(inventory),
-                    alert = inventory.lowStock + inventory.outOfStock > 0,
-                    onClick = onOpenInventory,
-                    modifier = Modifier.weight(1f),
-                )
-                DashboardTile(
-                    icon = Icons.Filled.TableChart,
-                    title = "Export",
-                    caption = "Excel workbook",
-                    alert = false,
-                    onClick = onExport,
-                    modifier = Modifier.weight(1f),
-                )
-            }
+        Button(
+            onClick = onAddBuyer,
+            modifier = Modifier.fillMaxWidth().padding(start = Dimens.spaceL, end = Dimens.spaceL, bottom = Dimens.spaceL),
+        ) {
+            Icon(Icons.Filled.PersonAdd, contentDescription = null, modifier = Modifier.size(Dimens.iconMedium))
+            Text("  Add buyer", maxLines = 1)
         }
-        if (pinTools) {
-            stickyHeader(key = "tools") { tools() }
-        } else {
-            item(key = "tools") { tools() }
-        }
-        buyerList(
-            buyers = state.buyers,
-            loaded = state.buyersLoaded,
-            searching = state.query.isNotBlank(),
-            selectedBuyerId = state.selectedBuyerId,
-            onSelect = onSelectBuyer,
-        )
     }
 }
 
-/** Buyers, open orders and the amount still to collect, across the whole showroom. */
+/**
+ * Open orders, the amount still to collect and the stock that needs attention, across the whole
+ * showroom, in one tinted strip. The stock figure opens the Inventory System.
+ */
 @Composable
-private fun SummaryStrip(summary: ShowroomSummary, modifier: Modifier = Modifier) {
-    Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Dimens.spaceS)) {
-        // Weights follow the caption and value widths ("OPEN ORDERS" is the longest caption).
-        MiniStat("Buyers", summary.buyerCount.toString(), Modifier.weight(0.8f))
-        MiniStat("Open orders", summary.openOrders.toString(), Modifier.weight(1.25f))
-        MiniStat("To collect", Money.format(summary.outstandingAmount), Modifier.weight(1.45f))
+private fun SummaryStrip(summary: ShowroomSummary, inventory: InventorySummary, onOpenInventory: () -> Unit) {
+    Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.primaryContainer) {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Figure("Open orders", summary.openOrders.toString(), Modifier.weight(1.2f))
+            Figure("To collect", Money.format(summary.outstandingAmount), Modifier.weight(1.25f))
+            val alert = inventory.lowStock + inventory.outOfStock > 0
+            Surface(
+                onClick = onOpenInventory,
+                modifier = Modifier.weight(1f).semantics(mergeDescendants = true) {},
+                color = MaterialTheme.colorScheme.primaryContainer,
+            ) {
+                Figure(
+                    "Stock",
+                    stockCaption(inventory),
+                    valueColor = if (alert) ShowroomTheme.colors.warning.foreground else MaterialTheme.colorScheme.secondary,
+                )
+            }
+        }
     }
 }
 
-/** "3 low · 1 out of stock", "12 products in stock" or "No products yet". */
-private fun inventoryCaption(s: InventorySummary): String = when {
-    s.totalProducts == 0 -> "No products yet"
-    s.lowStock + s.outOfStock == 0 -> "${s.totalProducts} product${if (s.totalProducts == 1) "" else "s"} in stock"
+/** "1 low · 1 out", "All in stock" or "No products". */
+private fun stockCaption(s: InventorySummary): String = when {
+    s.totalProducts == 0 -> "No products"
+    s.lowStock + s.outOfStock == 0 -> "All in stock"
     else -> listOfNotNull(
         s.lowStock.takeIf { it > 0 }?.let { "$it low" },
-        s.outOfStock.takeIf { it > 0 }?.let { "$it out of stock" },
+        s.outOfStock.takeIf { it > 0 }?.let { "$it out" },
     ).joinToString(" · ")
 }
 
-/** A tappable shortcut on the dashboard: an icon, a title and one line of status. */
 @Composable
-private fun DashboardTile(
-    icon: ImageVector,
-    title: String,
-    caption: String,
-    alert: Boolean,
-    onClick: () -> Unit,
+private fun Figure(
+    label: String,
+    value: String,
     modifier: Modifier = Modifier,
+    valueColor: Color = MaterialTheme.colorScheme.secondary,
 ) {
-    val warning = ShowroomTheme.colors.tone(StockStatus.LOW_STOCK)
-    Surface(
-        onClick = onClick,
-        modifier = modifier,
-        shape = MaterialTheme.shapes.small,
-        color = MaterialTheme.colorScheme.primaryContainer,
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = Dimens.spaceM, vertical = Dimens.spaceS),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Dimens.spaceS),
-        ) {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(Dimens.iconLarge))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.secondary, maxLines = 1)
-                Text(
-                    caption,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (alert) warning.foreground else ShowroomTheme.colors.mutedOnTint,
-                    fontWeight = if (alert) FontWeight.SemiBold else FontWeight.Normal,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun MiniStat(label: String, value: String, modifier: Modifier = Modifier) {
-    Surface(
-        modifier = modifier.semantics(mergeDescendants = true) {},
-        shape = MaterialTheme.shapes.small,
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(Dimens.border, MaterialTheme.colorScheme.outlineVariant),
-    ) {
-        Column(modifier = Modifier.padding(horizontal = Dimens.spaceM, vertical = Dimens.spaceS)) {
-            Text(
-                text = label.uppercase(),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            AmountText(value, MaterialTheme.typography.titleSmall, MaterialTheme.colorScheme.secondary, minSize = 9.sp)
-        }
+    Column(modifier = modifier.padding(horizontal = Dimens.spaceS + Dimens.spaceXs, vertical = Dimens.spaceS)) {
+        Text(
+            text = label.uppercase(),
+            style = MaterialTheme.typography.labelSmall,
+            color = ShowroomTheme.colors.mutedOnTint,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        AmountText(value, MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), valueColor, minSize = 9.sp)
     }
 }

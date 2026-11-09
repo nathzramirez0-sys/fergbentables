@@ -19,6 +19,6 @@ fun EditOrderDialog(
     buyerName = buyerName,
     initial = order,
     products = products,
-    onSave = onSave,
+    onSave = { edited, items, _ -> onSave(edited, items) },
     onDismiss = onDismiss,
 )

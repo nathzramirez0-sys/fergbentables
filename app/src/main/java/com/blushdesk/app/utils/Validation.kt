@@ -203,4 +203,13 @@ object Validation {
             ?: unitPrice(sellingPrice)
             ?: costPrice(costPrice)
             ?: stockCount(minimumStock, "Minimum stock")
+
+    /** The start of new order numbers: 1 to 4 capital letters or digits, beginning with a letter (RS, FB, RS2). */
+    fun orderPrefix(value: String): String? = when {
+        value.isBlank() -> "Enter a prefix, like BD or RS"
+        !ORDER_PREFIX.matches(value.trim()) -> "Use 1 to 4 letters or digits, starting with a letter"
+        else -> null
+    }
+
+    private val ORDER_PREFIX = Regex("[A-Z][A-Z0-9]{0,3}")
 }
